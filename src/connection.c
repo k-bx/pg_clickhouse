@@ -35,8 +35,19 @@
  * Connection cache (initialized on first use)
  */
 static HTAB* ConnectionHash = NULL;
+
+/*
+ * Private (non-cached) connections handed to foreign scans that needed a
+ * connection while the cached one was already serving a live ancestor scan.
+ * Tracked so a transaction-end callback can close any whose scan did not
+ * release cleanly (e.g. on error).
+ */
+static List* PrivateConnections = NIL;
+
 static void
 chfdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue);
+static void
+chfdw_xact_callback(XactEvent event, void* arg);
 
 static ch_connection
 clickhouse_connect(ForeignServer* server, UserMapping* user) {
@@ -83,8 +94,8 @@ clickhouse_connect(ForeignServer* server, UserMapping* user) {
     }
 }
 
-ch_connection
-chfdw_get_connection(UserMapping* user) {
+static ConnCacheEntry*
+get_connection_entry(UserMapping* user) {
     bool found;
     ConnCacheEntry* entry;
     ConnCacheKey key;
@@ -108,6 +119,7 @@ chfdw_get_connection(UserMapping* user) {
          */
         CacheRegisterSyscacheCallback(FOREIGNSERVEROID, chfdw_inval_callback, (Datum)0);
         CacheRegisterSyscacheCallback(USERMAPPINGOID, chfdw_inval_callback, (Datum)0);
+        RegisterXactCallback(chfdw_xact_callback, NULL);
     }
 
     /* Create hash key for the entry. Assume no pad bytes in key struct */
@@ -178,7 +190,76 @@ chfdw_get_connection(UserMapping* user) {
         );
     }
 
-    return entry->gate;
+    return entry;
+}
+
+ch_connection
+chfdw_get_connection(UserMapping* user) {
+    return get_connection_entry(user)->gate;
+}
+
+ch_scan_connection
+chfdw_get_scan_connection(UserMapping* user) {
+    ConnCacheEntry* entry = get_connection_entry(user);
+    ch_scan_connection sconn;
+
+    if (!entry->busy) {
+        entry->busy      = true;
+        sconn.gate       = entry->gate;
+        sconn.is_private = false;
+        return sconn;
+    }
+
+    /*
+     * The cached connection is already serving a live ancestor scan (e.g. the
+     * outer scan of a correlated subquery). ClickHouse allows only one query in
+     * flight per connection, so open a private one for this scan and remember
+     * it so chfdw_xact_callback can close it if the scan does not release.
+     */
+    {
+        ForeignServer* server = GetForeignServer(user->serverid);
+        ch_connection* held;
+        MemoryContext old;
+
+        old                = MemoryContextSwitchTo(CacheMemoryContext);
+        held               = palloc(sizeof(ch_connection));
+        *held              = clickhouse_connect(server, user);
+        PrivateConnections = lappend(PrivateConnections, held);
+        MemoryContextSwitchTo(old);
+
+        sconn.gate       = *held;
+        sconn.is_private = true;
+        return sconn;
+    }
+}
+
+void
+chfdw_release_scan_connection(UserMapping* user, ch_scan_connection sconn) {
+    if (sconn.is_private) {
+        ListCell* lc;
+
+        foreach (lc, PrivateConnections) {
+            ch_connection* held = (ch_connection*)lfirst(lc);
+
+            if (held->conn == sconn.gate.conn) {
+                PrivateConnections = foreach_delete_current(PrivateConnections, lc);
+                pfree(held);
+                break;
+            }
+        }
+        if (sconn.gate.conn != NULL) {
+            sconn.gate.methods->disconnect(sconn.gate.conn);
+        }
+    } else if (ConnectionHash != NULL) {
+        /* Communal: drop the busy lease only; the cache owns closing it. */
+        ConnCacheKey key      = { user->umid };
+        bool found            = false;
+        ConnCacheEntry* entry = hash_search(ConnectionHash, &key, HASH_FIND, &found);
+
+        if (found && entry != NULL) {
+            entry->busy = false;
+        }
+    }
 }
 
 /*
@@ -216,6 +297,42 @@ chfdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue) {
             (cacheid == FOREIGNSERVEROID && entry->server_hashvalue == hashvalue) ||
             (cacheid == USERMAPPINGOID && entry->mapping_hashvalue == hashvalue)) {
             entry->invalidated = true;
+        }
+    }
+}
+
+/*
+ * Transaction-end cleanup. By the end of a transaction no foreign scan is live,
+ * so close any private scan connections that were not released (e.g. a scan
+ * whose End was skipped on error) and clear any leftover busy markers on cached
+ * connections so they can be reused.
+ */
+static void
+chfdw_xact_callback(XactEvent event, void* arg) {
+    ListCell* lc;
+
+    if (event != XACT_EVENT_COMMIT && event != XACT_EVENT_ABORT &&
+        event != XACT_EVENT_PARALLEL_COMMIT && event != XACT_EVENT_PARALLEL_ABORT) {
+        return;
+    }
+
+    foreach (lc, PrivateConnections) {
+        ch_connection* held = (ch_connection*)lfirst(lc);
+
+        if (held->conn != NULL) {
+            held->methods->disconnect(held->conn);
+        }
+    }
+    list_free_deep(PrivateConnections);
+    PrivateConnections = NIL;
+
+    if (ConnectionHash != NULL) {
+        HASH_SEQ_STATUS scan;
+        ConnCacheEntry* entry;
+
+        hash_seq_init(&scan, ConnectionHash);
+        while ((entry = (ConnCacheEntry*)hash_seq_search(&scan)) != NULL) {
+            entry->busy = false;
         }
     }
 }

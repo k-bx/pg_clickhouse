@@ -249,6 +249,28 @@ chfdw_find_em_expr_for_rel(EquivalenceClass* ec, RelOptInfo* rel);
 /* in connection.c */
 extern ch_connection
 chfdw_get_connection(UserMapping* user);
+/*
+ * A connection leased to a foreign scan. When is_private, the scan opened it
+ * exclusively and chfdw_release_scan_connection closes it; otherwise gate is the
+ * shared cached connection and release only drops its busy lease (the connection
+ * cache, not the scan, owns the cached connection's lifetime).
+ */
+typedef struct ch_scan_connection {
+    ch_connection gate;
+    bool is_private;
+} ch_scan_connection;
+
+/*
+ * Acquire a connection for a foreign scan. Returns the cached connection if it
+ * is free, marking it busy; otherwise (a live ancestor scan already holds it)
+ * returns a freshly-opened private connection. ClickHouse permits only one query
+ * in flight per connection, so concurrent scans must not share one. Pair with
+ * chfdw_release_scan_connection at end of scan.
+ */
+extern ch_scan_connection
+chfdw_get_scan_connection(UserMapping* user);
+extern void
+chfdw_release_scan_connection(UserMapping* user, ch_scan_connection sconn);
 extern void
 chfdw_exec_query(ch_connection conn, const char* query);
 extern void
@@ -336,6 +358,7 @@ typedef struct ConnCacheEntry {
     ch_connection gate; /* connection to foreign server, or NULL */
     /* Remaining fields are invalid when conn is NULL: */
     bool invalidated;         /* true if reconnect is pending */
+    bool busy;                /* gate is held by a live foreign scan */
     uint32 server_hashvalue;  /* hash value of foreign server OID */
     uint32 mapping_hashvalue; /* hash value of user mapping OID */
 } ConnCacheEntry;

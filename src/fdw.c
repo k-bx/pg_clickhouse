@@ -116,12 +116,13 @@ typedef struct ChFdwScanState {
     List* retrieved_attrs; /* list of retrieved attribute numbers */
 
     /* for remote query execution */
-    ch_connection conn;        /* connection for the scan */
-    int numParams;             /* number of parameters passed to query */
-    Oid* param_oids;           /* output parameter type OIDs them */
-    List* param_exprs;         /* executable expressions for param values */
-    const char** param_values; /* textual values of query parameters */
-    ch_cursor* ch_cursor;      /* result of query from clickhouse */
+    ch_scan_connection scan_conn; /* connection leased for this scan */
+    UserMapping* user;            /* user mapping, for releasing scan_conn */
+    int numParams;                /* number of parameters passed to query */
+    Oid* param_oids;              /* output parameter type OIDs them */
+    List* param_exprs;            /* executable expressions for param values */
+    const char** param_values;    /* textual values of query parameters */
+    ch_cursor* ch_cursor;         /* result of query from clickhouse */
 
     /* for storing result tuple */
     HeapTuple tuple; /* array of currently-retrieved tuples */
@@ -215,6 +216,8 @@ static void
 clickhouseBeginForeignScan(ForeignScanState* node, int eflags);
 static TupleTableSlot*
 clickhouseIterateForeignScan(ForeignScanState* node);
+static void
+clickhouseReScanForeignScan(ForeignScanState* node);
 static void
 clickhouseEndForeignScan(ForeignScanState* node);
 static List*
@@ -1034,9 +1037,12 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
 
     /*
      * Get connection to the foreign server. Connection manager will establish
-     * new connection if necessary.
+     * a new connection if necessary. A scan whose ancestor already holds the
+     * cached connection gets a private one, since ClickHouse permits only one
+     * query in flight per connection.
      */
-    fsstate->conn = chfdw_get_connection(user);
+    fsstate->user      = user;
+    fsstate->scan_conn = chfdw_get_scan_connection(user);
 
     /* Get private info created by planner functions. */
     fsstate->query = strVal(list_nth(fsplan->fdw_private, FdwScanPrivateSelectSql));
@@ -1122,11 +1128,11 @@ fetch_tuple(ChFdwScanState* fsstate, TupleDesc tupdesc) {
 
     /* In both cases (binary and non binary), NULL means end of tuples. */
     {
-        cursor_fetch_row_method fetch_fn = fsstate->conn.methods->fetch_row;
+        cursor_fetch_row_method fetch_fn = fsstate->scan_conn.gate.methods->fetch_row;
 
         if (fsstate->is_streaming) {
-            Assert(fsstate->conn.methods->streaming_fetch_row != NULL);
-            fetch_fn = fsstate->conn.methods->streaming_fetch_row;
+            Assert(fsstate->scan_conn.gate.methods->streaming_fetch_row != NULL);
+            fetch_fn = fsstate->scan_conn.gate.methods->streaming_fetch_row;
         }
 
         if (fetch_fn(&ctx) == NULL) {
@@ -1207,16 +1213,18 @@ clickhouseIterateForeignScan(ForeignScanState* node) {
         }
 
         fsstate->is_streaming =
-            fsstate->fetch_size > 0 && fsstate->conn.methods->streaming_query != NULL;
+            fsstate->fetch_size > 0 &&
+            fsstate->scan_conn.gate.methods->streaming_query != NULL;
 
         if (fsstate->is_streaming) {
-            fsstate->ch_cursor = fsstate->conn.methods->streaming_query(
-                fsstate->conn.conn, &query, fsstate->fetch_size
+            fsstate->ch_cursor = fsstate->scan_conn.gate.methods->streaming_query(
+                fsstate->scan_conn.gate.conn, &query, fsstate->fetch_size
             );
         } else {
             /* Binary still falls back to the simple path for now. */
-            fsstate->ch_cursor =
-                fsstate->conn.methods->simple_query(fsstate->conn.conn, &query);
+            fsstate->ch_cursor = fsstate->scan_conn.gate.methods->simple_query(
+                fsstate->scan_conn.gate.conn, &query
+            );
         }
 
         time_used += fsstate->ch_cursor->request_time;
@@ -1240,6 +1248,54 @@ clickhouseIterateForeignScan(ForeignScanState* node) {
 }
 
 /*
+ * dispose_scan
+ *		Close the current cursor (freeing its response, and for the binary driver
+ *		draining the connection so it stays reusable) and dispose of the per-scan
+ *		batch context. Shared by the rescan and end callbacks.
+ *
+ *		When reset_batch_cxt is true (a rescan) the batch context is reset rather
+ *		than deleted, because more IterateForeignScan calls follow and rebuild the
+ *		cursor and response inside it. The cursor and response contexts are
+ *		children of batch_cxt, so deleting it on a rescan would leave the next
+ *		iteration allocating in a freed context, corrupting the response context
+ *		and hanging its teardown on the following rescan of a correlated subquery.
+ *		At end of scan (reset_batch_cxt false) it is deleted.
+ */
+static void
+dispose_scan(ChFdwScanState* fsstate, bool reset_batch_cxt) {
+    if (!fsstate) {
+        return;
+    }
+
+    if (fsstate->ch_cursor) {
+        MemoryContextDelete(fsstate->ch_cursor->memcxt);
+        fsstate->ch_cursor = NULL;
+    }
+
+    if (fsstate->batch_cxt) {
+        if (reset_batch_cxt) {
+            MemoryContextReset(fsstate->batch_cxt);
+        } else {
+            MemoryContextDelete(fsstate->batch_cxt);
+        }
+    }
+}
+
+/*
+ * clickhouseReScanForeignScan
+ *		Dispose of the current cursor and tuple batch so the next iteration
+ *		re-runs the query. Keeps the connection: the scan is not finished, and
+ *		(for a correlated subquery) will run again with a new parameter value.
+ */
+static void
+clickhouseReScanForeignScan(ForeignScanState* node) {
+    ChFdwScanState* fsstate = (ChFdwScanState*)node->fdw_state;
+
+    time_used = 0;
+    dispose_scan(fsstate, true); /* reset batch_cxt; more iterations follow */
+}
+
+/*
  * clickhouseEndForeignScan
  *		Finish scanning foreign table and dispose objects used for this scan
  */
@@ -1248,12 +1304,9 @@ clickhouseEndForeignScan(ForeignScanState* node) {
     ChFdwScanState* fsstate = (ChFdwScanState*)node->fdw_state;
 
     time_used = 0;
+    dispose_scan(fsstate, false); /* delete batch_cxt; scan is finished */
     if (fsstate) {
-        if (fsstate->ch_cursor) {
-            MemoryContextDelete(fsstate->ch_cursor->memcxt);
-            fsstate->ch_cursor = NULL;
-        }
-        MemoryContextDelete(fsstate->batch_cxt);
+        chfdw_release_scan_connection(fsstate->user, fsstate->scan_conn);
     }
 }
 
@@ -3408,7 +3461,7 @@ clickhouse_fdw_handler(PG_FUNCTION_ARGS) {
     routine->GetForeignPlan     = clickhouseGetForeignPlan;
     routine->BeginForeignScan   = clickhouseBeginForeignScan;
     routine->IterateForeignScan = clickhouseIterateForeignScan;
-    routine->ReScanForeignScan  = clickhouseEndForeignScan;
+    routine->ReScanForeignScan  = clickhouseReScanForeignScan;
     routine->EndForeignScan     = clickhouseEndForeignScan;
 
     /* Functions for updating foreign tables */

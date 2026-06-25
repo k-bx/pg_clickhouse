@@ -7,6 +7,21 @@ All notable changes to this project will be documented in this file. It uses the
   [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
     "Semantic Versioning 2.0.0"
 
+## [v0.3.2-backport] — Unreleased
+
+### 🐞 Bug Fixes
+
+*   Fixed crashes when a single query ran more than one foreign scan on the
+    binary (native-protocol) driver at once, such as a correlated subquery or a
+    nested-loop join over foreign tables, colliding in the single connection.
+    Each concurrently active scan now gets its own connection
+    ([#296]).
+*   Fixed a use-after-free of a foreign scan's batch memory context on rescan
+    that could corrupt memory and hang ([#296]).
+
+  [#296]: https://github.com/ClickHouse/pg_clickhouse/pull/296
+    "ClickHouse/pg_clickhouse#296 Fix benchmark queries that crash/hang with binary driver"
+
 ## [v0.3.2] — 2026-06-16
 
 This release makes binary-only changes. Once installed, any existing use of
