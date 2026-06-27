@@ -29,6 +29,7 @@ All notable changes to this project will be documented in this file. It uses the
     that could corrupt memory and hang ([#296]).
 *   Fixed foreign-table and user-mapping selection for pushed-down join and
     upper-relation scans ([#319]).
+*   Fixed subsecond precision lost inserting timestamps over HTTP ([#300]).
 
   [#296]: https://github.com/ClickHouse/pg_clickhouse/pull/296
     "ClickHouse/pg_clickhouse#296 Fix benchmark queries that crash/hang with binary driver"
@@ -36,6 +37,8 @@ All notable changes to this project will be documented in this file. It uses the
     "ClickHouse/pg_clickhouse#319 Fix foreign table selection for pushed-down joins"
   [#324]: https://github.com/ClickHouse/pg_clickhouse/pull/324
     "ClickHouse/pg_clickhouse#324 Push down compatible UNION queries and grouped set operations"
+  [#300]: https://github.com/ClickHouse/pg_clickhouse/pull/300
+    "ClickHouse/pg_clickhouse#300 fix(http): handle subsecond precision"
 
 ## [v0.3.2] — 2026-06-16
 

@@ -2998,8 +2998,7 @@ ch_timestamp_out(PG_FUNCTION_ARGS) {
     if (TIMESTAMP_NOT_FINITE(timestamp)) {
         EncodeSpecialTimestamp(timestamp, buf);
     } else if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) == 0) {
-        /* we ignore fractional seconds */
-        EncodeDateTime(tm, 0, false, 0, NULL, USE_ISO_DATES, buf);
+        EncodeDateTime(tm, fsec, false, 0, NULL, USE_ISO_DATES, buf);
     } else {
         ereport(
             ERROR,
@@ -3245,10 +3244,6 @@ deparseConst(Const* node, deparse_expr_cxt* context, int showtype) {
     getTypeOutputInfo(node->consttype, &typoutput, &typIsVarlena);
 
     if (typoutput == F_TIMESTAMPTZ_OUT || typoutput == F_TIMESTAMP_OUT) {
-        /*
-         * We use our own function here, that removes fractional seconds since
-         * there are not supported in clickhouse
-         */
         extval =
             DatumGetCString(DirectFunctionCall1(ch_timestamp_out, node->constvalue));
     } else if (typoutput == F_INTERVAL_OUT) {
