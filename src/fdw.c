@@ -975,11 +975,12 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
     ForeignScan* fsplan = (ForeignScan*)node->ss.ps.plan;
     EState* estate      = node->ss.ps.state;
     ChFdwScanState* fsstate;
+#if PG_VERSION_NUM < 160000
     RangeTblEntry* rte;
-    Oid userid;
-    ForeignTable* table;
-    UserMapping* user;
     int rtindex;
+#endif
+    Oid userid;
+    UserMapping* user;
     int numParams;
 
     /*
@@ -995,19 +996,19 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
     fsstate         = (ChFdwScanState*)palloc0(sizeof(ChFdwScanState));
     node->fdw_state = (void*)fsstate;
 
+    /* Identify which user to do the remote access as. */
+#if PG_VERSION_NUM >= 160000
+    userid = OidIsValid(fsplan->checkAsUser) ? fsplan->checkAsUser : GetUserId();
+#else
     /*
-     * Identify which user to do the remote access as. This should match what
-     * ExecCheckRTEPerms() does. In case of a join or aggregate, use the
-     * foreign-table member RTE as a representative; we would get the same
-     * result from any. fs_relids can also contain synthetic join RTEs, which
-     * do not have a relation OID.
+     * This should match what ExecCheckRTEPerms() does. In case of a join or
+     * aggregate, use a foreign-table member RTE as a representative.
+     * fs_relids can also contain synthetic join RTEs, which do not have a
+     * relation OID.
      */
     if (fsplan->scan.scanrelid > 0) {
         rtindex = fsplan->scan.scanrelid;
     } else {
-#if PG_VERSION_NUM >= 160000
-        rtindex = bms_next_member(fsplan->fs_base_relids, -1);
-#else
         rtindex = -1;
         while ((rtindex = bms_next_member(fsplan->fs_relids, rtindex)) >= 0) {
             rte = rt_fetch(rtindex, estate->es_range_table);
@@ -1016,7 +1017,6 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
                 break;
             }
         }
-#endif
         if (rtindex < 0) {
             elog(
                 ERROR,
@@ -1024,16 +1024,11 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
             );
         }
     }
-    rte = rt_fetch(rtindex, estate->es_range_table);
-#if PG_VERSION_NUM >= 160000
-    userid = OidIsValid(fsplan->checkAsUser) ? fsplan->checkAsUser : GetUserId();
-#else
+    rte    = rt_fetch(rtindex, estate->es_range_table);
     userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 #endif
 
-    /* Get info about foreign table. */
-    table = GetForeignTable(rte->relid);
-    user  = GetUserMapping(userid, table->serverid);
+    user = GetUserMapping(userid, fsplan->fs_server);
 
     /*
      * Get connection to the foreign server. Connection manager will establish
