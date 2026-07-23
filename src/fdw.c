@@ -328,6 +328,12 @@ add_foreign_grouping_paths(
     GroupPathExtraData* extra
 );
 static void
+add_foreign_distinct_paths(
+    PlannerInfo* root,
+    RelOptInfo* input_rel,
+    RelOptInfo* distinct_rel
+);
+static void
 add_foreign_window_paths(
     PlannerInfo* root,
     RelOptInfo* input_rel,
@@ -358,6 +364,12 @@ static int
 get_fetch_size_option(DefElem* def);
 static DefElem*
 ch_get_table_or_server_option(CHFdwRelationInfo* fpinfo, char* name);
+static bool
+distinct_expr_is_safe(Node* expr);
+static bool
+distinct_target_is_safe(PathTarget* target);
+static bool
+relation_uses_default_engine(RelOptInfo* rel);
 
 /* Make one query and close the connection */
 Datum
@@ -1012,16 +1024,12 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
         rtindex = -1;
         while ((rtindex = bms_next_member(fsplan->fs_relids, rtindex)) >= 0) {
             rte = rt_fetch(rtindex, estate->es_range_table);
-            if (rte->rtekind == RTE_RELATION &&
-                rte->relkind == RELKIND_FOREIGN_TABLE) {
+            if (rte->rtekind == RTE_RELATION && rte->relkind == RELKIND_FOREIGN_TABLE) {
                 break;
             }
         }
         if (rtindex < 0) {
-            elog(
-                ERROR,
-                "could not find foreign table for pg_clickhouse scan"
-            );
+            elog(ERROR, "could not find foreign table for pg_clickhouse scan");
         }
     }
     rte    = rt_fetch(rtindex, estate->es_range_table);
@@ -2690,6 +2698,76 @@ foreign_grouping_ok(PlannerInfo* root, RelOptInfo* grouped_rel, Node* havingQual
     return true;
 }
 
+static bool
+distinct_expr_is_safe(Node* expr) {
+    Oid type;
+
+    if (expr == NULL) {
+        return false;
+    }
+    type = exprType(expr);
+    switch (type) {
+    case BOOLOID:
+    case INT2OID:
+    case INT4OID:
+    case INT8OID:
+    case DATEOID:
+    case BYTEAOID:
+    case UUIDOID:
+        return true;
+    case VARCHAROID:
+        if (exprTypmod(expr) >= 0) {
+            return false;
+        }
+        /* fall through */
+    case TEXTOID: {
+        Oid collation = exprCollation(expr);
+
+        return !OidIsValid(collation) || get_collation_isdeterministic(collation);
+    }
+    default:
+        return false;
+    }
+}
+
+static bool
+distinct_target_is_safe(PathTarget* target) {
+    ListCell* lc;
+
+    if (target == NULL || target->exprs == NIL) {
+        return false;
+    }
+
+    foreach (lc, target->exprs) {
+        if (!distinct_expr_is_safe((Node*)lfirst(lc))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+relation_uses_default_engine(RelOptInfo* rel) {
+    CHFdwRelationInfo* fpinfo;
+
+    if (rel == NULL || rel->fdw_private == NULL) {
+        return false;
+    }
+    fpinfo = (CHFdwRelationInfo*)rel->fdw_private;
+    if (fpinfo->ch_table_engine != CH_DEFAULT) {
+        return false;
+    }
+    if (fpinfo->outerrel != NULL && fpinfo->outerrel != rel &&
+        !relation_uses_default_engine(fpinfo->outerrel)) {
+        return false;
+    }
+    if (fpinfo->innerrel != NULL && fpinfo->innerrel != rel &&
+        !relation_uses_default_engine(fpinfo->innerrel)) {
+        return false;
+    }
+    return true;
+}
+
 /*
  * clickhouseGetForeignUpperPaths
  *		Add paths for post-join operations like aggregation, grouping etc. if
@@ -2718,10 +2796,15 @@ clickhouseGetForeignUpperPaths(
         !((CHFdwRelationInfo*)input_rel->fdw_private)->pushdown_safe) {
         return;
     }
+    if (IS_UPPER_REL(input_rel) &&
+        ((CHFdwRelationInfo*)input_rel->fdw_private)->stage == UPPERREL_DISTINCT) {
+        return;
+    }
 
     /* Ignore stages we don't support; and skip any duplicate calls. */
     if ((stage != UPPERREL_GROUP_AGG && stage != UPPERREL_WINDOW &&
-         stage != UPPERREL_ORDERED && stage != UPPERREL_FINAL) ||
+         stage != UPPERREL_DISTINCT && stage != UPPERREL_ORDERED &&
+         stage != UPPERREL_FINAL) ||
         output_rel->fdw_private) {
         return;
     }
@@ -2739,6 +2822,9 @@ clickhouseGetForeignUpperPaths(
         break;
     case UPPERREL_WINDOW:
         add_foreign_window_paths(root, input_rel, output_rel);
+        break;
+    case UPPERREL_DISTINCT:
+        add_foreign_distinct_paths(root, input_rel, output_rel);
         break;
     case UPPERREL_ORDERED:
         add_foreign_ordered_paths(root, input_rel, output_rel);
@@ -2858,6 +2944,89 @@ add_foreign_grouping_paths(
     add_path(grouped_rel, (Path*)grouppath);
 }
 
+static void
+add_foreign_distinct_paths(
+    PlannerInfo* root,
+    RelOptInfo* input_rel,
+    RelOptInfo* distinct_rel
+) {
+    Query* parse               = root->parse;
+    CHFdwRelationInfo* ifpinfo = input_rel->fdw_private;
+    CHFdwRelationInfo* fpinfo  = distinct_rel->fdw_private;
+    PathTarget* target         = root->upper_targets[UPPERREL_DISTINCT];
+    ForeignPath* distinct_path;
+    List* tlist = NIL;
+    ListCell* lc;
+    double rows;
+    int width;
+    Cost startup_cost;
+    Cost total_cost;
+    int index = 0;
+
+    if ((input_rel->reloptkind != RELOPT_BASEREL &&
+         input_rel->reloptkind != RELOPT_JOINREL) ||
+        parse->distinctClause == NIL || parse->hasDistinctOn || parse->hasTargetSRFs ||
+        ifpinfo->local_conds || !distinct_target_is_safe(target) ||
+        !relation_uses_default_engine(input_rel)) {
+        return;
+    }
+
+    fpinfo->outerrel = input_rel;
+    fpinfo->table    = ifpinfo->table;
+    fpinfo->server   = ifpinfo->server;
+    fpinfo->user     = ifpinfo->user;
+    merge_fdw_options(fpinfo, ifpinfo, NULL);
+
+    foreach (lc, target->exprs) {
+        Expr* expr  = lfirst_node(Expr, lc);
+        Index sgref = get_pathtarget_sortgroupref(target, index++);
+        TargetEntry* tle;
+
+        if (!chfdw_is_foreign_expr(root, distinct_rel, expr) ||
+            is_foreign_param(root, distinct_rel, expr)) {
+            return;
+        }
+
+        tle = makeTargetEntry(expr, list_length(tlist) + 1, NULL, false);
+        tle->ressortgroupref = sgref;
+        tlist                = lappend(tlist, tle);
+    }
+
+    fpinfo->grouped_tlist    = tlist;
+    fpinfo->pushdown_safe    = true;
+    fpinfo->rel_startup_cost = -1;
+    fpinfo->rel_total_cost   = -1;
+    fpinfo->relation_name    = makeStringInfo();
+    appendStringInfo(
+        fpinfo->relation_name, "Distinct on (%s)", ifpinfo->relation_name->data
+    );
+
+    estimate_path_cost_size(&rows, &width, &startup_cost, &total_cost, 0.1);
+    fpinfo->rows         = rows;
+    fpinfo->width        = width;
+    fpinfo->startup_cost = startup_cost;
+    fpinfo->total_cost   = total_cost;
+
+    distinct_path = create_foreign_upper_path(
+        root,
+        distinct_rel,
+        target,
+        rows,
+#if PG_VERSION_NUM >= 180000
+        0,
+#endif
+        startup_cost,
+        total_cost,
+        NIL,
+        NULL,
+#if PG_VERSION_NUM >= 170000
+        NIL,
+#endif
+        NIL
+    );
+    add_path(distinct_rel, (Path*)distinct_path);
+}
+
 /*
  * foreign_window_ok
  *		Assess whether window functions in the query are safe to push down.
@@ -2961,6 +3130,10 @@ add_foreign_window_paths(
     int width;
     Cost startup_cost;
     Cost total_cost;
+
+    if (root->parse->distinctClause != NIL) {
+        return;
+    }
 
     /* Save the input_rel as outerrel in fpinfo */
     fpinfo->outerrel = input_rel;
