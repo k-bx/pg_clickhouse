@@ -9,6 +9,12 @@ All notable changes to this project will be documented in this file. It uses the
 
 ## [v0.3.2-backport] — Unreleased
 
+### ⚡ Improvements
+
+*   Added conservative pushdown for plain `SELECT DISTINCT`, compatible
+    same-server `UNION ALL` and `UNION DISTINCT`, and grouping or aggregation
+    over compatible `UNION ALL` queries ([#324]).
+
 ### 🐞 Bug Fixes
 
 *   Fixed crashes when a single query ran more than one foreign scan on the
@@ -18,9 +24,15 @@ All notable changes to this project will be documented in this file. It uses the
     ([#296]).
 *   Fixed a use-after-free of a foreign scan's batch memory context on rescan
     that could corrupt memory and hang ([#296]).
+*   Fixed foreign-table and user-mapping selection for pushed-down join and
+    upper-relation scans ([#319]).
 
   [#296]: https://github.com/ClickHouse/pg_clickhouse/pull/296
     "ClickHouse/pg_clickhouse#296 Fix benchmark queries that crash/hang with binary driver"
+  [#319]: https://github.com/ClickHouse/pg_clickhouse/pull/319
+    "ClickHouse/pg_clickhouse#319 Fix foreign table selection for pushed-down joins"
+  [#324]: https://github.com/ClickHouse/pg_clickhouse/pull/324
+    "ClickHouse/pg_clickhouse#324 Push down compatible UNION queries and grouped set operations"
 
 ## [v0.3.2] — 2026-06-16
 
