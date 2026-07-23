@@ -995,13 +995,31 @@ clickhouseBeginForeignScan(ForeignScanState* node, int eflags) {
     /*
      * Identify which user to do the remote access as. This should match what
      * ExecCheckRTEPerms() does. In case of a join or aggregate, use the
-     * lowest-numbered member RTE as a representative; we would get the same
-     * result from any.
+     * foreign-table member RTE as a representative; we would get the same
+     * result from any. fs_relids can also contain synthetic join RTEs, which
+     * do not have a relation OID.
      */
     if (fsplan->scan.scanrelid > 0) {
         rtindex = fsplan->scan.scanrelid;
     } else {
-        rtindex = bms_next_member(fsplan->fs_relids, -1);
+#if PG_VERSION_NUM >= 160000
+        rtindex = bms_next_member(fsplan->fs_base_relids, -1);
+#else
+        rtindex = -1;
+        while ((rtindex = bms_next_member(fsplan->fs_relids, rtindex)) >= 0) {
+            rte = rt_fetch(rtindex, estate->es_range_table);
+            if (rte->rtekind == RTE_RELATION &&
+                rte->relkind == RELKIND_FOREIGN_TABLE) {
+                break;
+            }
+        }
+#endif
+        if (rtindex < 0) {
+            elog(
+                ERROR,
+                "could not find foreign table for pg_clickhouse scan"
+            );
+        }
     }
     rte = rt_fetch(rtindex, estate->es_range_table);
 #if PG_VERSION_NUM >= 160000
