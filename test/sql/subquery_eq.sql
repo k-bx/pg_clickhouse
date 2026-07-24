@@ -3,6 +3,18 @@
 -- ch: https://clickhouse.com/docs/getting-started/example-datasets/tpch#data-generation-and-import
 -- pg: https://raw.githubusercontent.com/Vonng/pgtpc/refs/heads/master/tpch/ddl/schema.ddl
 SET datestyle = 'ISO';
+
+-- SubPlan pushdown is gated on ClickHouse 25.8+ (older analyzers reject the
+-- correlated SQL we generate), so the whole test aborts on older servers
+-- rather than carry version-specific expected output.
+SELECT clickhouse_raw_query($$SELECT version()$$) AS ch_version \gset
+SELECT (split_part(:'ch_version', '.', 1)::int,
+        split_part(:'ch_version', '.', 2)::int) < (25, 8) AS no_ch258 \gset
+\if :no_ch258
+\echo 'SKIP: SubPlan pushdown requires ClickHouse 25.8 or higher'
+\quit
+\endif
+
 CREATE SERVER sub_eq_svr FOREIGN DATA WRAPPER clickhouse_fdw
        OPTIONS(dbname 'sub_eq_test', driver 'binary');
 CREATE USER MAPPING FOR CURRENT_USER SERVER sub_eq_svr;
@@ -146,8 +158,8 @@ CREATE SCHEMA sub_eq_test;
 IMPORT FOREIGN SCHEMA sub_eq_test FROM SERVER sub_eq_svr INTO sub_eq_test;
 SET SESSION search_path = sub_eq_test,public;
 
--- Execute query 2.
-EXPLAIN (VERBOSE, COSTS OFF)
+-- Query 2 (TPC-H): pin the deparsed plan via EXPLAIN, then execute.
+SELECT $$
 select
 	s_acctbal,
 	s_name,
@@ -192,7 +204,10 @@ order by
 	s_name,
 	p_partkey
 LIMIT 100;
+$$ AS query2 \gset
 
+EXPLAIN (VERBOSE, COSTS OFF) :query2
+:query2
 
 -- Cleanup
 SELECT clickhouse_raw_query('DROP DATABASE sub_eq_test');

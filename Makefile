@@ -50,8 +50,9 @@ include $(PGXS)
 $(CH_C_DIR)/clickhouse.h: .gitmodules
 	git submodule update --init
 
-# Require clickhouse-c and the version header.
-$(OBJS): $(CH_C_DIR)/clickhouse.h src/include/version.h
+# Require clickhouse-c and the version header. The bitcode twins compile the
+# same sources, so they need the same generated header.
+$(OBJS) $(OBJS:.o=.bc): $(CH_C_DIR)/clickhouse.h src/include/version.h
 
 # Require the versioned C source and SQL script.
 all: sql/$(EXTENSION)--$(EXTVERSION).sql

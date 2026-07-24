@@ -3,6 +3,16 @@
 -- ch: https://clickhouse.com/docs/getting-started/example-datasets/tpch#data-generation-and-import
 -- pg: https://raw.githubusercontent.com/Vonng/pgtpc/refs/heads/master/tpch/ddl/schema.ddl
 SET datestyle = 'ISO';
+-- SubPlan pushdown is gated on ClickHouse 25.8+ (older analyzers reject the
+-- correlated SQL we generate), so the whole test aborts on older servers
+-- rather than carry version-specific expected output.
+SELECT clickhouse_raw_query($$SELECT version()$$) AS ch_version \gset
+SELECT (split_part(:'ch_version', '.', 1)::int,
+        split_part(:'ch_version', '.', 2)::int) < (25, 8) AS no_ch258 \gset
+\if :no_ch258
+\echo 'SKIP: SubPlan pushdown requires ClickHouse 25.8 or higher'
+\quit
+\endif
 CREATE SERVER sub_eq_svr FOREIGN DATA WRAPPER clickhouse_fdw
        OPTIONS(dbname 'sub_eq_test', driver 'binary');
 CREATE USER MAPPING FOR CURRENT_USER SERVER sub_eq_svr;
@@ -193,8 +203,8 @@ $$, 'dbname=sub_eq_test');
 CREATE SCHEMA sub_eq_test;
 IMPORT FOREIGN SCHEMA sub_eq_test FROM SERVER sub_eq_svr INTO sub_eq_test;
 SET SESSION search_path = sub_eq_test,public;
--- Execute query 2.
-EXPLAIN (VERBOSE, COSTS OFF)
+-- Query 2 (TPC-H): pin the deparsed plan via EXPLAIN, then execute.
+SELECT $$
 select
 	s_acctbal,
 	s_name,
@@ -239,28 +249,28 @@ order by
 	s_name,
 	p_partkey
 LIMIT 100;
-                                                                                                                                                                                                                                                                                  QUERY PLAN                                                                                                                                                                                                                                                                                   
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Limit
+$$ AS query2 \gset
+EXPLAIN (VERBOSE, COSTS OFF) :query2
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan
    Output: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment
-   ->  Nested Loop
-         Output: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment
-         Join Filter: ((part.p_partkey = partsupp.ps_partkey) AND ((SubPlan expr_1) = partsupp.ps_supplycost))
-         ->  Foreign Scan
-               Output: supplier.s_acctbal, supplier.s_name, supplier.s_address, supplier.s_phone, supplier.s_comment, partsupp.ps_partkey, partsupp.ps_supplycost, nation.n_name
-               Relations: (((supplier) INNER JOIN (partsupp)) INNER JOIN (nation)) INNER JOIN (region)
-               Remote SQL: SELECT r2.s_acctbal, r2.s_name, r2.s_address, r2.s_phone, r2.s_comment, r3.ps_partkey, r3.ps_supplycost, r4.n_name FROM    sub_eq_test.supplier r2 ALL INNER JOIN sub_eq_test.partsupp r3 ON (((r2.s_suppkey = r3.ps_suppkey))) ALL INNER JOIN sub_eq_test.nation r4 ON (((r2.s_nationkey = r4.n_nationkey))) ALL INNER JOIN sub_eq_test.region r5 ON (((r4.n_regionkey = r5.r_regionkey))) WHERE ((r5.r_name = 'EUROPE')) ORDER BY r2.s_acctbal DESC NULLS FIRST, r4.n_name ASC NULLS LAST, r2.s_name ASC NULLS LAST, r3.ps_partkey ASC NULLS LAST
-         ->  Materialize
-               Output: part.p_partkey, part.p_mfgr
-               ->  Foreign Scan on sub_eq_test.part
-                     Output: part.p_partkey, part.p_mfgr
-                     Remote SQL: SELECT p_partkey, p_mfgr FROM sub_eq_test.part WHERE ((p_type LIKE '%BRASS')) AND ((p_size = 15))
-         SubPlan expr_1
-           ->  Foreign Scan
-                 Output: (min(partsupp_1.ps_supplycost))
-                 Relations: Aggregate on ((((partsupp) INNER JOIN (supplier)) INNER JOIN (nation)) INNER JOIN (region))
-                 Remote SQL: SELECT min(r1.ps_supplycost) FROM    sub_eq_test.partsupp r1 ALL INNER JOIN sub_eq_test.supplier r2 ON (((r1.ps_suppkey = r2.s_suppkey))) ALL INNER JOIN sub_eq_test.nation r3 ON (((r2.s_nationkey = r3.n_nationkey))) ALL INNER JOIN sub_eq_test.region r4 ON (((r3.n_regionkey = r4.r_regionkey))) WHERE ((r4.r_name = 'EUROPE')) AND (({p1:Int32} = r1.ps_partkey))
-(19 rows)
+   Relations: ((((part) INNER JOIN (partsupp)) INNER JOIN (supplier)) INNER JOIN (nation)) INNER JOIN (region)
+   Remote SQL: SELECT r2.s_acctbal, r2.s_name, r4.n_name, r1.p_partkey, r1.p_mfgr, r2.s_address, r2.s_phone, r2.s_comment FROM     sub_eq_test.part r1 ALL INNER JOIN sub_eq_test.partsupp r3 ON (((r1.p_partkey = r3.ps_partkey))) ALL INNER JOIN sub_eq_test.supplier r2 ON (((r2.s_suppkey = r3.ps_suppkey))) ALL INNER JOIN sub_eq_test.nation r4 ON (((r2.s_nationkey = r4.n_nationkey))) ALL INNER JOIN sub_eq_test.region r5 ON (((r4.n_regionkey = r5.r_regionkey))) WHERE ((r5.r_name = 'EUROPE')) AND (((SELECT min(q1_1.ps_supplycost) FROM sub_eq_test.partsupp q1_1, sub_eq_test.supplier q1_2, sub_eq_test.nation q1_3, sub_eq_test.region q1_4 WHERE (((r1.p_partkey) = q1_1.ps_partkey)) AND ((q1_2.s_suppkey = q1_1.ps_suppkey)) AND ((q1_2.s_nationkey = q1_3.n_nationkey)) AND ((q1_3.n_regionkey = q1_4.r_regionkey)) AND ((q1_4.r_name = 'EUROPE'))) = r3.ps_supplycost)) AND ((r1.p_type LIKE '%BRASS')) AND ((r1.p_size = 15)) ORDER BY r2.s_acctbal DESC NULLS FIRST, r4.n_name ASC NULLS LAST, r2.s_name ASC NULLS LAST, r1.p_partkey ASC NULLS LAST LIMIT 100
+(4 rows)
+
+:query2
+ s_acctbal |       s_name       | n_name  | p_partkey |     p_mfgr     |                s_address                 |     s_phone     |                                       s_comment                                        
+-----------+--------------------+---------+-----------+----------------+------------------------------------------+-----------------+----------------------------------------------------------------------------------------
+    686.50 | Supplier#000001731 | GERMANY |    109220 | Manufacturer#4 | Dqy8LQtY5i8GygrdOC1lt,OVsIgrGoL8Z3PMs    | 17-115-638-8685 | lar requests. final, final platelets around the carefully even deposit
+    686.50 | Supplier#000001731 | GERMANY |    186694 | Manufacturer#4 | Dqy8LQtY5i8GygrdOC1lt,OVsIgrGoL8Z3PMs    | 17-115-638-8685 | lar requests. final, final platelets around the carefully even deposit
+    555.18 | Supplier#000002931 | GERMANY |     20428 | Manufacturer#4 | aUivhoesqMqv0FmJcPBMxBSl8DJvXBGj         | 17-905-318-3455 | t the fluffily ironic packages wake furiously
+     60.50 | Supplier#000003497 | GERMANY |    170979 | Manufacturer#4 | k,,DNvZ8XHvkepAky ,22QHj4MAoxhd          | 17-762-516-4410 | s breach accounts. express dolphins along the quickly ironic deposits hinder furiously
+    -63.88 | Supplier#000003937 | GERMANY |     73936 | Manufacturer#4 | kqEOwdVW,qJsJdcv6PwDJ6ii14mugDK3OgZN ngI | 17-621-453-7063 | y pending asymptotes. foxes are. deposits sleep quickly b
+   -271.69 | Supplier#000009733 | GERMANY |     89732 | Manufacturer#4 | XIkUGlZFKq4IiZsAIRxFwzVBw7D              | 17-789-292-3060 | ions. boldly regular requests play furiously. furiously busy
+   -604.88 | Supplier#000003113 | GERMANY |    105582 | Manufacturer#4 | HjX8M2Bjlz7pAcLzpyKT9 wNb                | 17-164-471-2650 | he ruthlessly final requests. express requests cajole quick
+   -752.27 | Supplier#000005299 | GERMANY |     70284 | Manufacturer#4 | m7Y2G8Pg,kl5AoMPK                        | 17-904-495-9057 | . carefully close foxes x-ray. carefully even package
+(8 rows)
 
 -- Cleanup
 SELECT clickhouse_raw_query('DROP DATABASE sub_eq_test');

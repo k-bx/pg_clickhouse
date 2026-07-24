@@ -14,6 +14,9 @@ All notable changes to this project will be documented in this file. It uses the
 *   Added conservative pushdown for plain `SELECT DISTINCT`, compatible
     same-server `UNION ALL` and `UNION DISTINCT`, and grouping or aggregation
     over compatible `UNION ALL` queries ([#324]).
+*   Added ClickHouse 25.8+ pushdown for safe correlated and uncorrelated
+    PostgreSQL SubPlan residue, including scalar, `IN`, and `NOT IN`
+    subqueries.
 
 ### 🐞 Bug Fixes
 
@@ -706,7 +709,7 @@ pg_clickhouse v0.1 will get its benefits on reload without needing to
 *   Mapped PostgreSQL `extract()` to push down to equivalent ClickHouse
     DateTime extraction functions (already mapped to `date_part()`)
 *   Mapped PostgreSQL `percentile_cont()` ordered set aggregate function to
-    push down to ClickHouse `quantile()` parametrized
+    push down to the ClickHouse `quantile()` parametric aggregate function
 *   Mapped the `COUNT()` return value to `bigint`
 *   Added the query text and, for the http engine, the status code to error
     messages

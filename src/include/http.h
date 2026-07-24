@@ -61,6 +61,8 @@ void
 ch_http_close(ch_http_connection_t* conn);
 ch_http_response_t*
 ch_http_simple_query(ch_http_connection_t* conn, const ch_query* query);
+void
+ch_http_server_version(ch_http_connection_t* conn, int* major, int* minor, int* patch);
 char*
 ch_http_last_error(void);
 

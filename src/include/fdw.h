@@ -25,6 +25,7 @@
 #include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
 #include "optimizer/optimizer.h"
+#include "server_version.h"
 #include "utils/relcache.h"
 
 #if PG_VERSION_NUM < 150000
@@ -86,6 +87,8 @@ typedef ch_cursor* (*streaming_query_method)(
 );
 typedef bool (*is_broken_method)(const void* conn);
 
+typedef ch_server_version (*server_version_method)(void* conn);
+
 typedef struct {
     disconnect_method disconnect;
     simple_query_method simple_query;
@@ -96,7 +99,8 @@ typedef struct {
                                                   * step needed */
     streaming_query_method streaming_query;      /* NULL if not supported */
     cursor_fetch_row_method streaming_fetch_row; /* NULL if not supported */
-    is_broken_method is_broken; /* NULL means connection is never broken */
+    is_broken_method is_broken;           /* NULL means connection is never broken */
+    server_version_method server_version; /* NULL if version is unavailable */
 } libclickhouse_methods;
 
 typedef struct {
@@ -111,6 +115,13 @@ ch_connection
 chfdw_http_connect(ch_connection_details* details);
 ch_connection
 chfdw_binary_connect(ch_connection_details* details);
+/*
+ * Return the ClickHouse server version for the connection bound to the given
+ * user mapping, connecting if necessary. Safe to call during planning.
+ * Returns {0, 0, 0} when the driver cannot report a version.
+ */
+ch_server_version
+chfdw_get_server_version(UserMapping* user);
 text*
 chfdw_http_fetch_raw_data(ch_cursor* cursor);
 List*

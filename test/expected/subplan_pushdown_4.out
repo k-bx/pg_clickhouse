@@ -1,0 +1,19 @@
+-- Tests for SubPlan (unflattened subquery) pushdown.
+--
+-- These cover the planner residue that pull_up_sublinks CANNOT convert to
+-- joins: correlated scalar subqueries, uncorrelated scalar subqueries in
+-- WHERE/HAVING, IN-subqueries with GROUP BY/HAVING, and NOT IN. Each shape
+-- pins the deparsed Remote SQL via EXPLAIN and then executes to validate the
+-- results.
+--
+-- SubPlan pushdown is gated on ClickHouse 25.8+ (older analyzers reject the
+-- correlated / NOT IN SQL we generate), so the whole test aborts on older
+-- servers rather than carry version-specific expected output.
+SET datestyle = 'ISO';
+SELECT clickhouse_raw_query($$SELECT version()$$) AS ch_version \gset
+SELECT (split_part(:'ch_version', '.', 1)::int,
+        split_part(:'ch_version', '.', 2)::int) < (25, 8) AS no_ch258 \gset
+\if :no_ch258
+\echo 'SKIP: SubPlan pushdown requires ClickHouse 25.8 or higher'
+SKIP: SubPlan pushdown requires ClickHouse 25.8 or higher
+\quit

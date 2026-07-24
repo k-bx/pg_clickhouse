@@ -358,6 +358,37 @@ ch_binary_is_broken(const ch_binary_connection_t* conn) {
     return s ? s->broken : false;
 }
 
+/*
+ * Reports the ClickHouse server version (major.minor.patch) for a binary
+ * connection. The native protocol reports the server version during the
+ * handshake, so it reads the cached handshake info rather than issuing a
+ * query. Writes 0 to all out-params when the version is unavailable.
+ */
+void
+ch_binary_server_version(
+    const ch_binary_connection_t* conn,
+    int* major,
+    int* minor,
+    int* patch
+) {
+    *major = *minor = *patch = 0;
+    if (!conn) {
+        return;
+    }
+
+    const struct ch_binary_state* s = (const struct ch_binary_state*)conn->client;
+    if (!s || !s->client) {
+        return;
+    }
+
+    const chc_server_info* info = chc_client_server_info(s->client);
+    if (info) {
+        *major = (int)info->version_major;
+        *minor = (int)info->version_minor;
+        *patch = (int)info->version_patch;
+    }
+}
+
 void
 ch_binary_close(ch_binary_connection_t* conn) {
     if (!conn) {

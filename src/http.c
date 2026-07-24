@@ -217,6 +217,72 @@ ch_http_simple_query(ch_http_connection_t* conn, const ch_query* query) {
     return resp;
 }
 
+/*
+ * Fetches and caches the ClickHouse server version via SELECT version().
+ * Writes 0 to all out-params when the version cannot be determined. Caches the
+ * result on the connection, so only the first call issues a query.
+ */
+void
+ch_http_server_version(ch_http_connection_t* conn, int* major, int* minor, int* patch) {
+    *major = *minor = *patch = 0;
+    if (conn == NULL) {
+        return;
+    }
+
+    /* conn is calloc'd (see ch_http_connect), so version.major == 0 reliably
+     * means the version has not been fetched and cached yet. */
+    if (conn->version.major == 0) {
+        ch_query query           = { "SELECT version()", 0, NULL, NULL, NULL, NULL };
+        ch_http_response_t* resp = ch_http_simple_query(conn, &query);
+
+        if (resp != NULL) {
+            if (resp->http_status == CH_HTTP_STATUS_OK && resp->data != NULL) {
+                int parsed, v_tweak;
+                char buf[32];
+                size_t n =
+                    resp->datasize < sizeof(buf) - 1 ? resp->datasize : sizeof(buf) - 1;
+
+                memcpy(buf, resp->data, n);
+                buf[n] = '\0';
+
+                /* Parse `major.minor.patch.tweak` from `version()` output. */
+                parsed = sscanf(
+                    buf,
+                    "%d.%d.%d.%d",
+                    &conn->version.major,
+                    &conn->version.minor,
+                    &conn->version.patch,
+                    &v_tweak
+                );
+                if (parsed < 4) {
+                    elog(
+                        WARNING,
+                        "pg_clickhouse: unexpected ClickHouse version() output \"%s\"",
+                        buf
+                    );
+                }
+                if (parsed < 2) {
+                    /* Version string probably trash; zero out. */
+                    conn->version.major = 0;
+                }
+            } else if (resp->http_status != CH_HTTP_STATUS_OK) {
+                elog(
+                    WARNING,
+                    "pg_clickhouse: SELECT version() failed (HTTP status %d): %.*s",
+                    (int)resp->http_status,
+                    resp->data ? (int)resp->datasize : 0,
+                    resp->data ? resp->data : ""
+                );
+            }
+            ch_http_response_free(resp);
+        }
+    }
+
+    *major = conn->version.major;
+    *minor = conn->version.minor;
+    *patch = conn->version.patch;
+}
+
 void
 ch_http_close(ch_http_connection_t* conn) {
     free(conn->base_url);

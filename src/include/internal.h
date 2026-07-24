@@ -2,12 +2,16 @@
 #define CLICKHOUSE_INTERNAL_H
 
 #include "curl/curl.h"
+#include "server_version.h"
 
 typedef struct ch_http_connection_t {
     CURL* curl;
     char* dbname;
     char* base_url;
     long ssl_version; /* CURLOPT_SSLVERSION min; DEFAULT means unset */
+    /* Server version, fetched lazily via SELECT version() then cached; a major
+     * of 0 means not fetched yet. */
+    ch_server_version version;
 } ch_http_connection_t;
 
 typedef struct ch_binary_connection_t {

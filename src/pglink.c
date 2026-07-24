@@ -53,6 +53,8 @@ static void
 char_to_datum(ChFdwScanRowContext* ctx, int attnum, char* data, size_t len);
 static void
 report_http_stream_query_failure(void* conn, const ch_query* query, HttpStream* stream);
+static ch_server_version
+http_server_version(void* conn);
 
 static libclickhouse_methods http_methods = {
     .disconnect          = http_disconnect,
@@ -62,6 +64,7 @@ static libclickhouse_methods http_methods = {
     .insert_tuple        = http_insert_tuple,
     .streaming_query     = http_streaming_query,
     .streaming_fetch_row = http_streaming_fetch_row,
+    .server_version      = http_server_version,
 };
 
 static void
@@ -96,6 +99,8 @@ extern char*
 ch_quote_literal(const char* rawstr);
 extern const char*
 ch_quote_ident(const char* rawstr);
+static ch_server_version
+binary_server_version(void* conn);
 
 static libclickhouse_methods binary_methods = {
     .disconnect          = binary_disconnect,
@@ -107,6 +112,7 @@ static libclickhouse_methods binary_methods = {
     .streaming_query     = NULL,
     .streaming_fetch_row = NULL,
     .is_broken           = binary_is_broken,
+    .server_version      = binary_server_version,
 };
 
 static int
@@ -195,6 +201,14 @@ http_disconnect(void* conn) {
     if (conn != NULL) {
         ch_http_close((ch_http_connection_t*)conn);
     }
+}
+
+static ch_server_version
+http_server_version(void* conn) {
+    ch_server_version v = { 0, 0, 0 };
+
+    ch_http_server_version((ch_http_connection_t*)conn, &v.major, &v.minor, &v.patch);
+    return v;
 }
 
 /*
@@ -899,6 +913,16 @@ binary_disconnect(void* conn) {
 static bool
 binary_is_broken(const void* conn) {
     return ch_binary_is_broken((const ch_binary_connection_t*)conn);
+}
+
+static ch_server_version
+binary_server_version(void* conn) {
+    ch_server_version v = { 0, 0, 0 };
+
+    ch_binary_server_version(
+        (ch_binary_connection_t*)conn, &v.major, &v.minor, &v.patch
+    );
+    return v;
 }
 
 static ch_cursor*

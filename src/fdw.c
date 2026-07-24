@@ -2457,17 +2457,27 @@ foreign_join_ok(
     List* joinclauses;
 
     /*
-     * We support pushing down INNER, LEFT, RIGHT, FULL OUTER and SEMI joins.
-     * ANTI joins are not supported.
+     * We support the most common joins, but list those we don't yet support
+     * for clarity.
      */
-    if (jointype != JOIN_INNER && jointype != JOIN_LEFT && jointype != JOIN_RIGHT &&
-        jointype != JOIN_FULL && jointype != JOIN_SEMI) {
-        return false;
-    }
-
-    /* Semi-join target can only reference the outer relation */
-    if (jointype == JOIN_SEMI &&
-        !semijoin_target_ok(root, joinrel, outerrel, innerrel)) {
+    switch (jointype) {
+    case JOIN_INNER:
+    case JOIN_LEFT:
+    case JOIN_RIGHT:
+    case JOIN_FULL:
+        break;
+    case JOIN_SEMI: /* deparses to LEFT SEMI JOIN */
+    case JOIN_ANTI: /* deparses to LEFT ANTI JOIN */
+        /* Semi/anti-join target can only reference the outer relation. */
+        if (!semijoin_target_ok(root, joinrel, outerrel, innerrel)) {
+            return false;
+        }
+        break;
+    // case JOIN_RIGHT_SEMI: /* Added in Postgres 18. */
+    // case JOIN_RIGHT_ANTI: /* Added in Postgres 16. */
+    case JOIN_UNIQUE_OUTER:
+    case JOIN_UNIQUE_INNER:
+    default:
         return false;
     }
 
@@ -2484,9 +2494,23 @@ foreign_join_ok(
     }
 
     /*
+     * A SEMI/ANTI joinrel used as the input for a further join would deparse
+     * as an inline nested join, which ClickHouse cannot parse, and the
+     * subquery-wrapping escape hatch requires reltarget coverage that
+     * SEMI/ANTI inputs do not guarantee. Keep such composites local; the
+     * SEMI/ANTI join itself can still push down as the scan's top rel.
+     */
+    if ((IS_JOIN_REL(outerrel) &&
+         (fpinfo_o->jointype == JOIN_SEMI || fpinfo_o->jointype == JOIN_ANTI)) ||
+        (IS_JOIN_REL(innerrel) &&
+         (fpinfo_i->jointype == JOIN_SEMI || fpinfo_i->jointype == JOIN_ANTI))) {
+        return false;
+    }
+
+    /*
      * If joining relations have local conditions, those conditions are
-     * required to be applied before joining the relations. Hence the join can
-     * not be pushed down.
+     * required to be applied before joining the relations. Hence the join
+     * cannot be pushed down.
      */
     if (fpinfo_o->local_conds || fpinfo_i->local_conds) {
         return false;
@@ -2630,9 +2654,10 @@ foreign_join_ok(
         break;
 
     case JOIN_SEMI:
+    case JOIN_ANTI:
 
         /*
-         * For semi-join, inner's conditions go to joinclauses (ON),
+         * For semi/anti-join, inner's conditions go to joinclauses (ON),
          * outer's conditions go to remote_conds (WHERE). Extract join key
          * equalities to joinclauses for the ON clause.
          */
@@ -2642,6 +2667,19 @@ foreign_join_ok(
             list_concat(fpinfo->remote_conds, list_copy(fpinfo_o->remote_conds));
         fpinfo->remote_conds =
             extract_join_equals(fpinfo->remote_conds, &fpinfo->joinclauses);
+
+        /*
+         * Subquery-wrapping a join-typed input would require its
+         * reltarget to cover every Var the ON clause references, which
+         * does not hold for SEMI/ANTI inputs (join-only columns are not
+         * propagated upstream). Until the deparser can widen the wrapped
+         * subquery's targetlist, refuse ANTI pushdown when either input
+         * is itself a join and fall back to local execution. SEMI keeps
+         * its historical behavior.
+         */
+        if (jointype == JOIN_ANTI && (IS_JOIN_REL(outerrel) || IS_JOIN_REL(innerrel))) {
+            return false;
+        }
         break;
 
     case JOIN_FULL:
@@ -2672,15 +2710,24 @@ foreign_join_ok(
     }
 
     /*
-     * ClickHouse requires SEMI JOINs to have an ON clause with join
-     * conditions. Reject uncorrelated EXISTS subqueries that have no join
-     * keys.
-     *
-     * XXX Change to use ClickHouse EXISTS in this case?
-     * https://clickhouse.com/docs/sql-reference/operators/exists
+     * ClickHouse SEMI/ANTI JOINs require at least one equi-join key in the ON
+     * clause. Reject when the joinclauses have no simple equality referencing
+     * both sides (e.g., uncorrelated EXISTS).
      */
-    if (jointype == JOIN_SEMI && fpinfo->joinclauses == NIL) {
-        return false;
+    if (jointype == JOIN_SEMI || jointype == JOIN_ANTI) {
+        bool has_equi_key = false;
+
+        foreach (lc, fpinfo->joinclauses) {
+            RestrictInfo* rinfo = lfirst_node(RestrictInfo, lc);
+
+            if (is_simple_join_clause((Expr*)rinfo)) {
+                has_equi_key = true;
+                break;
+            }
+        }
+        if (!has_equi_key) {
+            return false;
+        }
     }
 
     /* Mark that this join can be pushed down safely */

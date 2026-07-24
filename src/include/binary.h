@@ -41,6 +41,18 @@ ch_binary_close(ch_binary_connection_t* conn);
 extern bool
 ch_binary_is_broken(const ch_binary_connection_t* conn);
 
+/*
+ * Read the server version captured during the native-protocol handshake.
+ * Writes 0 to all out-params when the version is unavailable.
+ */
+extern void
+ch_binary_server_version(
+    const ch_binary_connection_t* conn,
+    int* major,
+    int* minor,
+    int* patch
+);
+
 /* SELECT. */
 extern ch_binary_response_t*
 ch_binary_simple_query(

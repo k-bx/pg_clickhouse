@@ -201,18 +201,33 @@ regex.sql
  25+        | regex.out
  23-24      | regex_1.out
 
+subplan_pushdown.sql
+--------------------
+
+ Postgres | File
+----------|------------------------
+ 19       | subplan_pushdown.out
+ 17-18    | subplan_pushdown_1.out
+ 16       | subplan_pushdown_2.out
+ 13-15    | subplan_pushdown_3.out
+
+ClickHouse | File
+------------|--------------------------------------
+ 25.8+      | subplan_pushdown.out (per Postgres, above)
+ < 25.8     | subplan_pushdown_4.out (test aborts)
+
 subquery_eq.sql
 ----------------
 
  Postgres | File
 ----------|-------------------
- 19       | subquery_eq.out
- 16-18    | subquery_eq_1.out
- 13-18    | subquery_eq_2.out
+ 16-19    | subquery_eq.out
+ 13-15    | subquery_eq_1.out
 
  ClickHouse | File
-------------|-----------------
- 23+        | subquery_eq.out
+------------|----------------------------------
+ 25.8+      | subquery_eq.out (per Postgres, above)
+ < 25.8     | subquery_eq_2.out (test aborts)
 
 subquery_pushdown.sql
 ---------------------

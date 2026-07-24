@@ -262,6 +262,16 @@ chfdw_release_scan_connection(UserMapping* user, ch_scan_connection sconn) {
     }
 }
 
+ch_server_version
+chfdw_get_server_version(UserMapping* user) {
+    ch_connection conn = chfdw_get_connection(user);
+
+    if (conn.methods->server_version == NULL) {
+        return (ch_server_version){ 0, 0, 0 };
+    }
+    return conn.methods->server_version(conn.conn);
+}
+
 /*
  * Connection invalidation callback function
  *
