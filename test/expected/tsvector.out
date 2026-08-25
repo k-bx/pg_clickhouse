@@ -2,16 +2,29 @@ SET datestyle = 'ISO';
 CREATE SERVER tsvector_loopback FOREIGN DATA WRAPPER clickhouse_fdw
     OPTIONS(dbname 'tsvector_test', driver 'binary');
 CREATE USER MAPPING FOR CURRENT_USER SERVER tsvector_loopback;
-CREATE SERVER tsvector_admin FOREIGN DATA WRAPPER clickhouse_fdw;
-CREATE USER MAPPING FOR CURRENT_USER SERVER tsvector_admin;
-CALL clickhouse_perform('tsvector_admin', 'DROP DATABASE IF EXISTS tsvector_test');
-CALL clickhouse_perform('tsvector_admin', 'CREATE DATABASE tsvector_test');
-CALL clickhouse_perform('tsvector_admin', $$
+SELECT clickhouse_raw_query('DROP DATABASE IF EXISTS tsvector_test');
+ clickhouse_raw_query 
+----------------------
+ 
+(1 row)
+
+SELECT clickhouse_raw_query('CREATE DATABASE tsvector_test');
+ clickhouse_raw_query 
+----------------------
+ 
+(1 row)
+
+SELECT clickhouse_raw_query($$
     CREATE TABLE tsvector_test.documents (
         id Int32,
         search_tsv Nullable(String)
     ) ENGINE = MergeTree ORDER BY id
 $$);
+ clickhouse_raw_query 
+----------------------
+ 
+(1 row)
+
 CREATE SCHEMA tsvector_raw;
 IMPORT FOREIGN SCHEMA tsvector_test
     FROM SERVER tsvector_loopback INTO tsvector_raw;
@@ -162,13 +175,16 @@ EXPLAIN (VERBOSE, COSTS OFF) EXECUTE tsvector_search('Девятый');
 
 DEALLOCATE tsvector_search;
 RESET plan_cache_mode;
-CALL clickhouse_perform('tsvector_admin', 'DROP DATABASE tsvector_test');
+SELECT clickhouse_raw_query('DROP DATABASE tsvector_test');
+ clickhouse_raw_query 
+----------------------
+ 
+(1 row)
+
 DROP VIEW tsvector_documents;
 DROP TABLE local_tsvector_documents;
 DROP SERVER tsvector_loopback CASCADE;
 NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to user mapping for ubuntu on server tsvector_loopback
 drop cascades to foreign table tsvector_raw.documents
-DROP SERVER tsvector_admin CASCADE;
-NOTICE:  drop cascades to user mapping for ubuntu on server tsvector_admin
 DROP SCHEMA tsvector_raw CASCADE;

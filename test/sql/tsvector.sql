@@ -3,12 +3,10 @@ SET datestyle = 'ISO';
 CREATE SERVER tsvector_loopback FOREIGN DATA WRAPPER clickhouse_fdw
     OPTIONS(dbname 'tsvector_test', driver 'binary');
 CREATE USER MAPPING FOR CURRENT_USER SERVER tsvector_loopback;
-CREATE SERVER tsvector_admin FOREIGN DATA WRAPPER clickhouse_fdw;
-CREATE USER MAPPING FOR CURRENT_USER SERVER tsvector_admin;
 
-CALL clickhouse_perform('tsvector_admin', 'DROP DATABASE IF EXISTS tsvector_test');
-CALL clickhouse_perform('tsvector_admin', 'CREATE DATABASE tsvector_test');
-CALL clickhouse_perform('tsvector_admin', $$
+SELECT clickhouse_raw_query('DROP DATABASE IF EXISTS tsvector_test');
+SELECT clickhouse_raw_query('CREATE DATABASE tsvector_test');
+SELECT clickhouse_raw_query($$
     CREATE TABLE tsvector_test.documents (
         id Int32,
         search_tsv Nullable(String)
@@ -98,9 +96,8 @@ EXPLAIN (VERBOSE, COSTS OFF) EXECUTE tsvector_search('Девятый');
 DEALLOCATE tsvector_search;
 RESET plan_cache_mode;
 
-CALL clickhouse_perform('tsvector_admin', 'DROP DATABASE tsvector_test');
+SELECT clickhouse_raw_query('DROP DATABASE tsvector_test');
 DROP VIEW tsvector_documents;
 DROP TABLE local_tsvector_documents;
 DROP SERVER tsvector_loopback CASCADE;
-DROP SERVER tsvector_admin CASCADE;
 DROP SCHEMA tsvector_raw CASCADE;

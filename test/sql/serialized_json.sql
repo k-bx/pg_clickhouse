@@ -4,18 +4,13 @@ CREATE SERVER serialized_json_loopback FOREIGN DATA WRAPPER clickhouse_fdw
 OPTIONS (dbname 'serialized_json_test', driver 'binary');
 CREATE USER MAPPING FOR CURRENT_USER SERVER serialized_json_loopback;
 
-CREATE SERVER serialized_json_admin FOREIGN DATA WRAPPER clickhouse_fdw;
-CREATE USER MAPPING FOR CURRENT_USER SERVER serialized_json_admin;
-
-CALL clickhouse_perform(
-    'serialized_json_admin',
+SELECT clickhouse_raw_query(
     'DROP DATABASE IF EXISTS serialized_json_test'
 );
-CALL clickhouse_perform(
-    'serialized_json_admin',
+SELECT clickhouse_raw_query(
     'CREATE DATABASE serialized_json_test'
 );
-CALL clickhouse_perform('serialized_json_admin', $$
+SELECT clickhouse_raw_query($$
     CREATE TABLE serialized_json_test.documents (
         id Int32 NOT NULL,
         body Nullable(String)
@@ -93,9 +88,7 @@ DROP VIEW serialized_json.documents_json;
 DROP VIEW serialized_json.documents_jsonb;
 DROP FOREIGN TABLE serialized_json.documents;
 DROP SCHEMA serialized_json;
-CALL clickhouse_perform(
-    'serialized_json_admin',
+SELECT clickhouse_raw_query(
     'DROP DATABASE serialized_json_test'
 );
 DROP SERVER serialized_json_loopback CASCADE;
-DROP SERVER serialized_json_admin CASCADE;
