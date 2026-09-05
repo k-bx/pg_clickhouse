@@ -229,6 +229,7 @@ typedef struct CHFdwRelationInfo {
     List* setop_tlist;
 
     /* Subquery information */
+    List* subquery_exprs;        /* Output plus columns needed by enclosing joins. */
     bool make_outerrel_subquery; /* do we deparse outerrel as a
                                   * subquery? */
     bool make_innerrel_subquery; /* do we deparse innerrel as a
@@ -543,5 +544,11 @@ chfdw_translate_to_char_format(const char* pgfmt, StringInfo out);
 #define table_close_compat(r, l) table_close(r, l)
 #define lnext_compat(l, i) lnext(l, i)
 #endif
+
+extern UserMapping*
+chfdw_gate_user_mapping(PlannerInfo* root, RelOptInfo* foreignrel, Oid serverid);
+
+extern Var*
+chfdw_semijoin_outer_var(Var* var, List* clauses, RelOptInfo* outerrel);
 
 #endif /* CLICKHOUSE_FDW_H */

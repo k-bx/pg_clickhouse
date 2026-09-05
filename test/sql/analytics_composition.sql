@@ -1,0 +1,137 @@
+SET datestyle = 'ISO';
+CREATE SERVER analytics_composition FOREIGN DATA WRAPPER clickhouse_fdw
+    OPTIONS (dbname 'analytics_composition_test', driver 'binary');
+CREATE USER MAPPING FOR CURRENT_USER SERVER analytics_composition;
+SELECT clickhouse_raw_query('DROP DATABASE IF EXISTS analytics_composition_test');
+SELECT clickhouse_raw_query('CREATE DATABASE analytics_composition_test');
+SELECT clickhouse_raw_query('CREATE TABLE analytics_composition_test.messages
+    (id Int64, label Nullable(String), deleted Bool) ENGINE=MergeTree ORDER BY id');
+SELECT clickhouse_raw_query('CREATE TABLE analytics_composition_test.units
+    (id Int64, deleted Bool) ENGINE=MergeTree ORDER BY id');
+SELECT clickhouse_raw_query('CREATE TABLE analytics_composition_test.links
+    (item_id Nullable(Int64), unit_id Int64) ENGINE=MergeTree ORDER BY unit_id');
+SELECT clickhouse_raw_query('CREATE TABLE analytics_composition_test.media
+    (item_id Nullable(Int64)) ENGINE=MergeTree ORDER BY tuple()');
+SELECT clickhouse_raw_query('INSERT INTO analytics_composition_test.messages VALUES
+    (1,NULL,false),(2,''legacy'',false),(3,'''',false),(4,''other'',false),(5,NULL,true),(6,NULL,false)');
+SELECT clickhouse_raw_query('INSERT INTO analytics_composition_test.units VALUES (10,false),(20,true)');
+SELECT clickhouse_raw_query('INSERT INTO analytics_composition_test.links VALUES
+    (1,10),(1,10),(2,20),(3,10),(NULL,10),(5,10)');
+SELECT clickhouse_raw_query('INSERT INTO analytics_composition_test.media VALUES (1),(1),(2),(4),(NULL)');
+SELECT clickhouse_raw_query('CREATE TABLE analytics_composition_test.semi_outer
+    (id Int64) ENGINE=MergeTree ORDER BY id');
+SELECT clickhouse_raw_query('CREATE TABLE analytics_composition_test.semi_inner
+    (id Nullable(Int64), value Nullable(Int64)) ENGINE=MergeTree ORDER BY tuple()');
+SELECT clickhouse_raw_query('INSERT INTO analytics_composition_test.semi_outer VALUES (1),(2),(3)');
+SELECT clickhouse_raw_query('INSERT INTO analytics_composition_test.semi_inner VALUES (1,1),(1,9),(2,2),(3,NULL),(NULL,9)');
+CREATE SCHEMA analytics_remote;
+IMPORT FOREIGN SCHEMA analytics_composition_test FROM SERVER analytics_composition INTO analytics_remote;
+CREATE SCHEMA analytics_local;
+CREATE TABLE analytics_local.messages AS TABLE analytics_remote.messages;
+CREATE TABLE analytics_local.units AS TABLE analytics_remote.units;
+CREATE TABLE analytics_local.links AS TABLE analytics_remote.links;
+CREATE TABLE analytics_local.media AS TABLE analytics_remote.media;
+CREATE TABLE analytics_local.semi_outer AS TABLE analytics_remote.semi_outer;
+CREATE TABLE analytics_local.semi_inner AS TABLE analytics_remote.semi_inner;
+
+-- Compare with PostgreSQL on identical inputs, including NULL and duplicate links.
+-- Keep filtering, aggregates and limits remote, except nullable NOT IN.
+DO $test$
+DECLARE
+    driver text;
+    query text;
+    expected jsonb;
+    actual jsonb;
+    plan jsonb;
+BEGIN
+    FOREACH driver IN ARRAY ARRAY['binary', 'http'] LOOP
+        EXECUTE format('ALTER SERVER analytics_composition OPTIONS (SET driver %L)', driver);
+        FOREACH query IN ARRAY ARRAY[
+            'SELECT o.id FROM analytics_remote.semi_outer o WHERE EXISTS
+             (SELECT 1 FROM analytics_remote.semi_inner i WHERE i.id=o.id AND i.value<>o.id) ORDER BY o.id',
+            'SELECT o.id FROM analytics_remote.semi_outer o WHERE NOT EXISTS
+             (SELECT 1 FROM analytics_remote.semi_inner i WHERE i.id=o.id AND i.value<>o.id) ORDER BY o.id',
+            'SELECT count(*) FROM analytics_remote.messages m WHERE NOT m.deleted
+             AND EXISTS (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE l.item_id=m.id AND NOT u.deleted)
+             AND EXISTS (SELECT 1 FROM analytics_remote.media a WHERE a.item_id=m.id)',
+            'SELECT count(*) FROM analytics_remote.messages m WHERE NOT m.deleted
+             AND (m.label=''legacy'' OR EXISTS (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE l.item_id=m.id AND NOT u.deleted))
+             AND NOT EXISTS (SELECT 1 FROM analytics_remote.media a WHERE a.item_id=m.id)',
+            'SELECT m.id FROM analytics_remote.messages m WHERE NOT m.deleted
+             AND EXISTS (SELECT 1 FROM analytics_remote.links l WHERE l.item_id=m.id)
+             AND NOT EXISTS (SELECT 1 FROM analytics_remote.media a WHERE a.item_id=m.id)
+             ORDER BY m.id DESC LIMIT 2',
+            'SELECT m.id FROM analytics_remote.messages m WHERE NOT m.deleted
+             AND NOT EXISTS (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE l.item_id=m.id AND NOT u.deleted)
+             AND NOT EXISTS (SELECT 1 FROM analytics_remote.media a WHERE a.item_id=m.id)
+             ORDER BY m.id LIMIT 2',
+            'SELECT m.id FROM analytics_remote.messages m WHERE m.id NOT IN
+             (SELECT l.item_id FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE NOT u.deleted)
+             ORDER BY m.id',
+            'SELECT m.id FROM analytics_remote.messages m WHERE
+             (m.label=''legacy'' OR EXISTS (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id AND l.item_id=m.id WHERE NOT u.deleted))
+             ORDER BY m.id LIMIT 3',
+            'SELECT m.id FROM analytics_remote.messages m WHERE m.id >
+             (SELECT min(l.item_id) FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE NOT u.deleted)
+             ORDER BY m.id LIMIT 2',
+            'SELECT m.id,a.item_id FROM analytics_remote.messages m LEFT JOIN analytics_remote.media a ON a.item_id=m.id
+             WHERE NOT m.deleted AND EXISTS (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE l.item_id=m.id AND NOT u.deleted)
+             ORDER BY m.id,a.item_id LIMIT 5',
+            'SELECT count(*) FROM analytics_remote.messages m FULL JOIN analytics_remote.media a ON a.item_id=m.id
+             WHERE (m.id IS NULL OR NOT m.deleted) AND NOT EXISTS (SELECT 1 FROM analytics_remote.links l WHERE l.item_id=m.id)',
+            'SELECT count(*) FROM analytics_remote.messages m WHERE NOT m.deleted
+             AND (m.label=''legacy'' OR NOT EXISTS (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE l.item_id=m.id AND NOT u.deleted))'
+        ] LOOP
+            EXECUTE format('SELECT coalesce(jsonb_agg(t), ''[]''::jsonb) FROM (%s) t', replace(query, 'analytics_remote.', 'analytics_local.')) INTO expected;
+            EXECUTE format('SELECT coalesce(jsonb_agg(t), ''[]''::jsonb) FROM (%s) t', query) INTO actual;
+            IF actual IS DISTINCT FROM expected THEN
+                RAISE EXCEPTION '% mismatch: % vs %, query %', driver, actual, expected, query;
+            END IF;
+            EXECUTE 'EXPLAIN (VERBOSE, COSTS OFF, FORMAT JSON) ' || query INTO plan;
+            IF position('m.id NOT IN' IN query) = 0 AND plan #>> '{0,Plan,Node Type}' <> 'Foreign Scan' THEN
+                RAISE EXCEPTION '% did not push down: %', driver, plan;
+            END IF;
+        END LOOP;
+    END LOOP;
+END;
+$test$;
+
+-- The SubPlan path must still enforce PostgreSQL table privileges.
+CREATE ROLE analytics_restricted;
+GRANT USAGE ON SCHEMA analytics_remote TO analytics_restricted;
+GRANT SELECT ON analytics_remote.messages TO analytics_restricted;
+CREATE USER MAPPING FOR analytics_restricted SERVER analytics_composition;
+SET ROLE analytics_restricted;
+SELECT m.id FROM analytics_remote.messages m WHERE m.label='legacy' OR EXISTS
+    (SELECT 1 FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE l.item_id=m.id);
+RESET ROLE;
+GRANT SELECT ON analytics_remote.links,analytics_remote.units TO analytics_restricted;
+CREATE VIEW analytics_owned_links AS
+SELECT l.item_id FROM analytics_remote.links l JOIN analytics_remote.units u ON u.id=l.unit_id WHERE NOT u.deleted;
+ALTER VIEW analytics_owned_links OWNER TO analytics_restricted;
+DO $test$
+DECLARE
+    plan jsonb;
+    actual bigint[];
+BEGIN
+    SELECT array_agg(m.id ORDER BY m.id) INTO actual FROM analytics_remote.messages m
+    WHERE m.label='legacy' OR EXISTS (SELECT 1 FROM analytics_owned_links l WHERE l.item_id=m.id);
+    IF actual IS DISTINCT FROM ARRAY[1,2,3,5]::bigint[] THEN
+        RAISE EXCEPTION 'view owner result mismatch: %', actual;
+    END IF;
+    EXPLAIN (VERBOSE,COSTS OFF,FORMAT JSON)
+    SELECT m.id FROM analytics_remote.messages m
+    WHERE m.label='legacy' OR EXISTS (SELECT 1 FROM analytics_owned_links l WHERE l.item_id=m.id)
+    INTO plan;
+    IF plan #>> '{0,Plan,Filter}' IS NULL THEN
+        RAISE EXCEPTION 'different view owner must retain local subplan: %', plan;
+    END IF;
+END;
+$test$;
+DROP VIEW analytics_owned_links;
+DROP OWNED BY analytics_restricted;
+DROP ROLE analytics_restricted;
+DROP SCHEMA analytics_local CASCADE;
+DROP SCHEMA analytics_remote CASCADE;
+DROP SERVER analytics_composition CASCADE;
+SELECT clickhouse_raw_query('DROP DATABASE analytics_composition_test');

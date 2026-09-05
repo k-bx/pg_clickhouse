@@ -152,6 +152,7 @@ typedef struct deparse_expr_cxt {
      */
     SubPlan* subplan;
     struct deparse_expr_cxt* parent_ctx;
+    bool join_quals;
 } deparse_expr_cxt;
 
 #define REL_ALIAS_PREFIX "r"
@@ -805,6 +806,12 @@ foreign_expr_walker(Node* node, foreign_glob_cxt* glob_cxt) {
         CustomObjectDef* cdef = NULL;
         FuncExpr* fe          = (FuncExpr*)node;
 
+        /* PostgreSQL applies session-zone and DST rules to these casts. */
+        if (fe->funcid == F_TIMESTAMP_TIMESTAMPTZ ||
+            fe->funcid == F_TIMESTAMPTZ_TIMESTAMP) {
+            return false;
+        }
+
         /*
          * If function used by the expression is not shippable, it
          * can't be sent to remote because it might have incompatible
@@ -1142,6 +1149,13 @@ foreign_expr_walker(Node* node, foreign_glob_cxt* glob_cxt) {
     } break;
     case T_CaseTestExpr:
         break;
+    case T_AlternativeSubPlan: {
+        AlternativeSubPlan* alternatives = (AlternativeSubPlan*)node;
+
+        /* All alternatives implement the same expression. Keep its SubPlan. */
+        return alternatives->subplans != NIL &&
+               foreign_expr_walker(linitial(alternatives->subplans), glob_cxt);
+    }
     case T_SubPlan: {
         /*
          * A SubPlan node is the planner's residue of a SubLink that
@@ -1238,8 +1252,8 @@ foreign_expr_walker(Node* node, foreign_glob_cxt* glob_cxt) {
  * the version gate degrades to "no pushdown" rather than failing a query
  * (or a bare EXPLAIN) at plan time.
  */
-static UserMapping*
-subplan_gate_user_mapping(PlannerInfo* root, RelOptInfo* foreignrel, Oid serverid) {
+UserMapping*
+chfdw_gate_user_mapping(PlannerInfo* root, RelOptInfo* foreignrel, Oid serverid) {
     Oid userid  = InvalidOid;
     int rtindex = -1;
 
@@ -1297,11 +1311,73 @@ subplan_gate_user_mapping(PlannerInfo* root, RelOptInfo* foreignrel, Oid serveri
 }
 
 static bool
+subplan_from_relids(
+    Node* node,
+    Query* query,
+    Oid serverid,
+    Oid userid,
+    Relids* relids
+) {
+    if (IsA(node, RangeTblRef)) {
+        RangeTblRef* rtr   = (RangeTblRef*)node;
+        RangeTblEntry* rte = rt_fetch(rtr->rtindex, query->rtable);
+        Oid check_user     = InvalidOid;
+
+        if (rte->rtekind != RTE_RELATION || rte->relkind != RELKIND_FOREIGN_TABLE ||
+            rte->securityQuals != NIL ||
+            GetForeignTable(rte->relid)->serverid != serverid) {
+            return false;
+        }
+#if PG_VERSION_NUM >= 160000
+        if (rte->perminfoindex != 0) {
+            check_user = getRTEPermissionInfo(query->rteperminfos, rte)->checkAsUser;
+        }
+#else
+        check_user = rte->checkAsUser;
+#endif
+        if (!OidIsValid(check_user)) {
+            check_user = GetUserId();
+        }
+        if (check_user != userid) {
+            return false;
+        }
+        *relids = bms_add_member(*relids, rtr->rtindex);
+        return true;
+    }
+    if (IsA(node, JoinExpr)) {
+        JoinExpr* join = (JoinExpr*)node;
+
+        /* Outer joins require null-extension and join-alias handling. */
+        return join->jointype == JOIN_INNER &&
+               subplan_from_relids(join->larg, query, serverid, userid, relids) &&
+               subplan_from_relids(join->rarg, query, serverid, userid, relids);
+    }
+    return false;
+}
+
+static bool
+subplan_join_quals_shippable(Node* node, foreign_glob_cxt* context) {
+    if (IsA(node, RangeTblRef)) {
+        return true;
+    }
+    if (IsA(node, JoinExpr)) {
+        JoinExpr* join = (JoinExpr*)node;
+
+        return !contain_subplans(join->quals) &&
+               foreign_expr_walker(join->quals, context) &&
+               subplan_join_quals_shippable(join->larg, context) &&
+               subplan_join_quals_shippable(join->rarg, context);
+    }
+    return false;
+}
+
+static bool
 is_shippable_subplan(SubPlan* subplan, foreign_glob_cxt* glob_cxt) {
     PlannerInfo* subroot;
     Query* query;
     foreign_glob_cxt sub_cxt;
     CHFdwRelationInfo* fpinfo;
+    UserMapping* user;
     ListCell* lc;
 
     if (subplan->subLinkType != EXPR_SUBLINK &&
@@ -1334,6 +1410,12 @@ is_shippable_subplan(SubPlan* subplan, foreign_glob_cxt* glob_cxt) {
     if (fpinfo == NULL || fpinfo->server == NULL) {
         return false;
     }
+    user = chfdw_gate_user_mapping(
+        glob_cxt->root, glob_cxt->foreignrel, fpinfo->server->serverid
+    );
+    if (user == NULL) {
+        return false;
+    }
 
     /* Structural features we do not deparse */
     if (query->setOperations || query->cteList || query->windowClause ||
@@ -1359,26 +1441,29 @@ is_shippable_subplan(SubPlan* subplan, foreign_glob_cxt* glob_cxt) {
         return false;
     }
 
-    /*
-     * FROM must be plain comma-joined foreign tables on the same server as
-     * the outer scan.
-     */
+    memset(&sub_cxt, 0, sizeof(sub_cxt));
+    sub_cxt.root           = subroot;
+    sub_cxt.foreignrel     = glob_cxt->foreignrel;
+    sub_cxt.subquery_scope = true;
     foreach (lc, query->jointree->fromlist) {
-        RangeTblRef* rtr;
-        RangeTblEntry* rte;
-
-        if (!IsA(lfirst(lc), RangeTblRef)) {
+        /* Native IN is only equivalent when UNKNOWN can be treated as FALSE.
+         * Keep nullable value/NOT IN cases local for the newly supported joins. */
+        if (IsA(lfirst(lc), JoinExpr) && subplan->subLinkType == ANY_SUBLINK &&
+            !subplan->unknownEqFalse) {
             return false;
         }
-        rtr = (RangeTblRef*)lfirst(lc);
-        rte = rt_fetch(rtr->rtindex, query->rtable);
-
-        if (rte->rtekind != RTE_RELATION || rte->relkind != RELKIND_FOREIGN_TABLE ||
-            rte->securityQuals != NIL) {
+        if (!subplan_from_relids(
+                lfirst(lc),
+                query,
+                fpinfo->server->serverid,
+                user->userid,
+                &sub_cxt.relids
+            )) {
             return false;
         }
-
-        if (GetForeignTable(rte->relid)->serverid != fpinfo->server->serverid) {
+    }
+    foreach (lc, query->jointree->fromlist) {
+        if (!subplan_join_quals_shippable(lfirst(lc), &sub_cxt)) {
             return false;
         }
     }
@@ -1436,21 +1521,6 @@ is_shippable_subplan(SubPlan* subplan, foreign_glob_cxt* glob_cxt) {
         return false;
     }
 
-    /*
-     * Walk the subquery's own expressions in a sub-scope whose relids are the
-     * subquery's FROM entries.
-     */
-    memset(&sub_cxt, 0, sizeof(sub_cxt));
-    sub_cxt.root           = subroot;
-    sub_cxt.foreignrel     = glob_cxt->foreignrel; /* for fpinfo lookups */
-    sub_cxt.subquery_scope = true;
-    sub_cxt.relids         = NULL;
-    foreach (lc, query->jointree->fromlist) {
-        RangeTblRef* rtr = (RangeTblRef*)lfirst(lc);
-
-        sub_cxt.relids = bms_add_member(sub_cxt.relids, rtr->rtindex);
-    }
-
     foreach (lc, query->targetList) {
         TargetEntry* tle = lfirst_node(TargetEntry, lc);
 
@@ -1477,14 +1547,8 @@ is_shippable_subplan(SubPlan* subplan, foreign_glob_cxt* glob_cxt) {
      * its RTE's checkAsUser, e.g. a view's owner, when that is set), and when
      * no mapping exists it refuses the pushdown rather than erroring.
      */
-    {
-        UserMapping* user = subplan_gate_user_mapping(
-            glob_cxt->root, glob_cxt->foreignrel, fpinfo->server->serverid
-        );
-
-        if (user == NULL || !chfdw_version_ge(chfdw_get_server_version(user), 25, 8)) {
-            return false;
-        }
+    if (!chfdw_version_ge(chfdw_get_server_version(user), 25, 8)) {
+        return false;
     }
 
     return true;
@@ -1674,7 +1738,7 @@ ch_format_type_extended(Oid type_oid, int32 typemod, uint16 flags) {
 
     case TIMESTAMPTZOID:
     case TIMESTAMPOID:
-        buf = pstrdup("DateTime");
+        buf = pstrdup("DateTime64(6, 'UTC')");
         break;
     case DATEOID:
         buf = pstrdup("Date");
@@ -2265,7 +2329,12 @@ deparseSubqueryTargetList(deparse_expr_cxt* context) {
     Assert(IS_SIMPLE_REL(foreignrel) || IS_JOIN_REL(foreignrel));
 
     first = true;
-    foreach (lc, foreignrel->reltarget->exprs) {
+    foreach (
+        lc,
+        ((CHFdwRelationInfo*)foreignrel->fdw_private)->subquery_exprs != NIL
+            ? ((CHFdwRelationInfo*)foreignrel->fdw_private)->subquery_exprs
+            : foreignrel->reltarget->exprs
+    ) {
         Node* node = (Node*)lfirst(lc);
 
         if (!first) {
@@ -2442,6 +2511,7 @@ deparseFromExprForRel(
             context.array_as_tuple = false;
             context.no_sort_parens = false;
             context.fpinfo         = fpinfo;
+            context.join_quals     = true;
 
             appendStringInfoChar(buf, '(');
             appendConditions(fpinfo->joinclauses, &context);
@@ -2532,7 +2602,10 @@ deparseRangeTblRef(
          * expressions specified in the relation's reltarget (see
          * deparseSubqueryTargetList).
          */
-        ncols = list_length(foreignrel->reltarget->exprs);
+        ncols = list_length(
+            fpinfo->subquery_exprs != NIL ? fpinfo->subquery_exprs
+                                          : foreignrel->reltarget->exprs
+        );
         if (ncols > 0) {
             int i;
 
@@ -2779,6 +2852,9 @@ deparseExpr(Expr* node, deparse_expr_cxt* context) {
     case T_SubPlan:
         deparseSubPlan((SubPlan*)node, context);
         break;
+    case T_AlternativeSubPlan:
+        deparseSubPlan(linitial(((AlternativeSubPlan*)node)->subplans), context);
+        break;
     default:
         elog(ERROR, "unsupported expression type for deparse: %d", (int)nodeTag(node));
         break;
@@ -2832,6 +2908,33 @@ derived_column_number(Var* node, deparse_expr_cxt* context) {
     return 0;
 }
 
+static Var*
+semijoin_visible_var(Var* var, RelOptInfo* rel, bool join_quals) {
+    CHFdwRelationInfo* fpinfo = (CHFdwRelationInfo*)rel->fdw_private;
+
+    if (!IS_JOIN_REL(rel)) {
+        return var;
+    }
+    if (!join_quals && fpinfo->jointype == JOIN_SEMI &&
+        bms_is_member(var->varno, fpinfo->innerrel->relids)) {
+        Var* outer =
+            chfdw_semijoin_outer_var(var, fpinfo->joinclauses, fpinfo->outerrel);
+
+        if (outer != NULL) {
+            var = outer;
+        }
+    }
+    if (bms_is_member(var->varno, fpinfo->outerrel->relids) &&
+        !fpinfo->make_outerrel_subquery) {
+        return semijoin_visible_var(var, fpinfo->outerrel, false);
+    }
+    if (bms_is_member(var->varno, fpinfo->innerrel->relids) &&
+        !fpinfo->make_innerrel_subquery) {
+        return semijoin_visible_var(var, fpinfo->innerrel, false);
+    }
+    return var;
+}
+
 static void
 deparseVar(Var* node, deparse_expr_cxt* context) {
     CustomObjectDef* cdef;
@@ -2878,6 +2981,8 @@ deparseVar(Var* node, deparse_expr_cxt* context) {
      * INVARIANT comment at SUBPLAN_REL_ALIAS_PREFIX).
      */
     Assert(context->subplan == NULL);
+
+    node = semijoin_visible_var(node, context->scanrel, context->join_quals);
 
     colno = derived_column_number(node, context);
     if (colno > 0) {
@@ -3237,6 +3342,9 @@ deparseConst(Const* node, deparse_expr_cxt* context, int showtype) {
         return;
     }
 
+    if (node->consttype == TIMESTAMPOID || node->consttype == TIMESTAMPTZOID) {
+        showtype = 1;
+    }
     if (showtype > 0) {
         appendStringInfoString(buf, "cast(");
     }
@@ -3428,7 +3536,11 @@ printRemoteParam(
     StringInfo buf  = context->buf;
     char* ptypename = deparse_type_name(paramtype, paramtypmod);
 
-    appendStringInfo(buf, "{p%d:%s}", paramindex, ptypename);
+    if (paramtype == TIMESTAMPOID || paramtype == TIMESTAMPTZOID) {
+        appendStringInfo(buf, "{p%d:Nullable(%s)}", paramindex, ptypename);
+    } else {
+        appendStringInfo(buf, "{p%d:%s}", paramindex, ptypename);
+    }
 }
 
 /*
@@ -3562,29 +3674,59 @@ deparseSubPlanTargetList(deparse_expr_cxt* context) {
  * with the outer query's aliases. Only the deparseRelation leaf is shared.
  */
 static void
+deparseSubPlanFromNode(Node* node, deparse_expr_cxt* context) {
+    StringInfo buf = context->buf;
+
+    if (IsA(node, RangeTblRef)) {
+        RangeTblRef* rtr   = (RangeTblRef*)node;
+        RangeTblEntry* rte = rt_fetch(rtr->rtindex, context->root->parse->rtable);
+        Relation rel       = table_open_compat(rte->relid, NoLock);
+
+        deparseRelation(buf, rel);
+        appendStringInfo(
+            buf,
+            " %s%d_%d",
+            SUBPLAN_REL_ALIAS_PREFIX,
+            context->subplan->plan_id,
+            rtr->rtindex
+        );
+        table_close_compat(rel, NoLock);
+    } else {
+        JoinExpr* join = castNode(JoinExpr, node);
+
+        /* Flatten INNER joins; their predicates are emitted in WHERE. */
+        deparseSubPlanFromNode(join->larg, context);
+        appendStringInfoString(buf, ", ");
+        deparseSubPlanFromNode(join->rarg, context);
+    }
+}
+
+static void
 deparseSubPlanFrom(deparse_expr_cxt* context) {
-    SubPlan* subplan = context->subplan;
-    Query* query     = context->root->parse;
-    StringInfo buf   = context->buf;
     ListCell* lc;
     bool first = true;
 
-    Assert(subplan != NULL);
-
-    foreach (lc, query->jointree->fromlist) {
-        RangeTblRef* rtr   = lfirst_node(RangeTblRef, lc);
-        RangeTblEntry* rte = rt_fetch(rtr->rtindex, query->rtable);
-        Relation rel       = table_open_compat(rte->relid, NoLock);
-
+    foreach (lc, context->root->parse->jointree->fromlist) {
         if (!first) {
-            appendStringInfoString(buf, ", ");
+            appendStringInfoString(context->buf, ", ");
         }
         first = false;
-        deparseRelation(buf, rel);
-        appendStringInfo(
-            buf, " %s%d_%d", SUBPLAN_REL_ALIAS_PREFIX, subplan->plan_id, rtr->rtindex
-        );
-        table_close_compat(rel, NoLock);
+        deparseSubPlanFromNode(lfirst(lc), context);
+    }
+}
+
+static void
+deparseSubPlanJoinQuals(Node* node, deparse_expr_cxt* context, bool* has_where) {
+    if (IsA(node, JoinExpr)) {
+        JoinExpr* join = (JoinExpr*)node;
+
+        deparseSubPlanJoinQuals(join->larg, context, has_where);
+        deparseSubPlanJoinQuals(join->rarg, context, has_where);
+        if (join->quals) {
+            appendStringInfoString(context->buf, *has_where ? " AND " : " WHERE ");
+            deparseSubPlanQuals(join->quals, context);
+            *has_where = true;
+        }
     }
 }
 
@@ -3640,6 +3782,15 @@ deparseSubPlanQuery(SubPlan* subplan, deparse_expr_cxt* context) {
     if (query->jointree->quals != NULL) {
         appendStringInfoString(buf, " WHERE ");
         deparseSubPlanQuals(query->jointree->quals, &subctx);
+    }
+
+    {
+        ListCell* lc;
+        bool has_where = query->jointree->quals != NULL;
+
+        foreach (lc, query->jointree->fromlist) {
+            deparseSubPlanJoinQuals(lfirst(lc), &subctx, &has_where);
+        }
     }
 
     /* Keys off context->root->parse, which is the subquery here. */
@@ -4195,9 +4346,11 @@ deparseFuncExpr(FuncExpr* node, deparse_expr_cxt* context) {
 
         appendStringInfoString(buf, "cast(");
         deparseExpr((Expr*)linitial(node->args), context);
-        appendStringInfo(
-            buf, ", 'Nullable(%s)')", deparse_type_name(rettype, coercedTypmod)
+        appendStringInfoString(buf, ", ");
+        deparseStringLiteral(
+            buf, psprintf("Nullable(%s)", deparse_type_name(rettype, coercedTypmod))
         );
+        appendStringInfoChar(buf, ')');
         return;
     }
 
@@ -6595,7 +6748,12 @@ get_relation_column_alias_ids(
 
     /* Get the column alias ID */
     i = 1;
-    foreach (lc, foreignrel->reltarget->exprs) {
+    foreach (
+        lc,
+        ((CHFdwRelationInfo*)foreignrel->fdw_private)->subquery_exprs != NIL
+            ? ((CHFdwRelationInfo*)foreignrel->fdw_private)->subquery_exprs
+            : foreignrel->reltarget->exprs
+    ) {
         if (equal(lfirst(lc), (Node*)node)) {
             *colno = i;
             return;

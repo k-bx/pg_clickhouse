@@ -176,7 +176,11 @@ setup_curl(HttpStream* stream, const ch_query* query) {
             part = curl_mime_addpart(stream->form);
             snprintf(temp_buf, sizeof(temp_buf), "param_p%d", i + 1);
             curl_mime_name(part, temp_buf);
-            curl_mime_data(part, query->param_values[i], CURL_ZERO_TERMINATED);
+            curl_mime_data(
+                part,
+                query->param_values[i] != NULL ? query->param_values[i] : "\\N",
+                CURL_ZERO_TERMINATED
+            );
         }
         curl_easy_setopt(stream->curl, CURLOPT_MIMEPOST, stream->form);
     }

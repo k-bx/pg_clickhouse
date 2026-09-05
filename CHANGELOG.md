@@ -20,6 +20,16 @@ All notable changes to this project will be documented in this file. It uses the
 
 ### 🐞 Bug Fixes
 
+*   Preserved microseconds in timestamp constants, casts, and custom/generic
+    prepared parameters using query-only `DateTime64(6)` representations.
+    Kept timezone-dependent PostgreSQL casts local and aligned naive timestamp
+    reads and inserts across the binary and HTTP drivers.
+*   Corrected nullable prepared parameters on both drivers and query-scoped
+    insert cleanup when SPI queries change driver connections.
+*   Composed safe correlated INNER joins and SEMI/ANTI joins while retaining
+    effective-user permissions, NULL semantics, and server-version gates.
+    Inner-dependent SEMI/ANTI predicates stay in `ON`, adapted from Josh
+    Ventura's [#347] at `f49ddb02ae29b042db844a455f41aad22a3e1ea8`.
 *   Fixed crashes when a single query ran more than one foreign scan on the
     binary (native-protocol) driver at once, such as a correlated subquery or a
     nested-loop join over foreign tables, colliding in the single connection.
@@ -44,6 +54,8 @@ All notable changes to this project will be documented in this file. It uses the
 
   [#338]: https://github.com/ClickHouse/pg_clickhouse/pull/338
     "ClickHouse/pg_clickhouse#338 Preserve fractional seconds in to_timestamp()"
+  [#347]: https://github.com/ClickHouse/pg_clickhouse/pull/347
+    "ClickHouse/pg_clickhouse#347 Fix incorrect classification of semi/anti-join conditions"
 
 ## [v0.3.2] — 2026-06-16
 

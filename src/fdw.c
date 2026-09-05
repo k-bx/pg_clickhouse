@@ -2224,7 +2224,7 @@ create_foreign_modify(
     /* make a connection and prepare an insertion state */
     fmstate->conn = chfdw_get_connection(user);
 
-    old_mcxt       = MemoryContextSwitchTo(PortalContext);
+    old_mcxt       = MemoryContextSwitchTo(estate->es_query_cxt);
     fmstate->state = fmstate->conn.methods->prepare_insert(
         fmstate->conn.conn, rri, target_attrs, &q, table_name
     );
@@ -2398,6 +2398,82 @@ extract_join_equals(List* conds, List** to) {
 }
 
 /*
+ * Move conditions that reference innerrelids from conds to *to. Return the
+ * remaining conditions.
+ *
+ * In a SEMI or ANTI join, every condition that references the inner relation
+ * is part of the ON match test. A WHERE condition can inspect only the one
+ * arbitrary row exposed by ClickHouse's LEFT SEMI JOIN; LEFT ANTI JOIN exposes
+ * no matching row. Do not rely on is_pushed_down: PostgreSQL sets it for
+ * semijoin conditions even when they belong in the remote ON clause.
+ */
+static List*
+extract_inner_conds(List* conds, Relids innerrelids, List** to) {
+    ListCell* lc;
+    List* res = NIL;
+
+    foreach (lc, conds) {
+        RestrictInfo* rinfo = lfirst_node(RestrictInfo, lc);
+
+        if (bms_overlap(rinfo->clause_relids, innerrelids)) {
+            *to = lappend(*to, rinfo);
+        } else {
+            res = lappend(res, rinfo);
+        }
+    }
+    return res;
+}
+
+static bool
+semi_join_needs_nonequi_on(
+    List* joinclauses,
+    RelOptInfo* outerrel,
+    RelOptInfo* innerrel
+) {
+    ListCell* lc;
+
+    foreach (lc, joinclauses) {
+        RestrictInfo* rinfo = lfirst_node(RestrictInfo, lc);
+
+        if (bms_overlap(rinfo->clause_relids, outerrel->relids) &&
+            bms_overlap(rinfo->clause_relids, innerrel->relids) &&
+            !is_simple_join_clause((Expr*)rinfo)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Var*
+chfdw_semijoin_outer_var(Var* var, List* clauses, RelOptInfo* outerrel) {
+    ListCell* lc;
+
+    foreach (lc, clauses) {
+        RestrictInfo* clause = lfirst_node(RestrictInfo, lc);
+        OpExpr* op;
+        Var* left;
+        Var* right;
+
+        if (!is_simple_join_clause((Expr*)clause)) {
+            continue;
+        }
+        op    = (OpExpr*)clause->clause;
+        left  = linitial_node(Var, op->args);
+        right = lsecond_node(Var, op->args);
+        if (left->vartype != right->vartype || left->varcollid != right->varcollid) {
+            continue;
+        }
+        if (equal(var, left) && bms_is_member(right->varno, outerrel->relids)) {
+            return right;
+        }
+        if (equal(var, right) && bms_is_member(left->varno, outerrel->relids)) {
+            return left;
+        }
+    }
+    return NULL;
+}
+
+/*
  * Check if reltarget is safe for semi-join pushdown. Returns false if the
  * target references columns from the inner relation that aren't in outer
  * relation.
@@ -2407,7 +2483,9 @@ semijoin_target_ok(
     PlannerInfo* root,
     RelOptInfo* joinrel,
     RelOptInfo* outerrel,
-    RelOptInfo* innerrel
+    RelOptInfo* innerrel,
+    JoinType jointype,
+    List* clauses
 ) {
     List* vars;
     ListCell* lc;
@@ -2427,13 +2505,45 @@ semijoin_target_ok(
 
         if (bms_is_member(var->varno, innerrel->relids) &&
             !bms_is_member(var->varno, outerrel->relids)) {
-            ok = false;
-            break;
+            if (jointype != JOIN_SEMI ||
+                chfdw_semijoin_outer_var(var, clauses, outerrel) == NULL) {
+                ok = false;
+                break;
+            }
         }
     }
 
     list_free(vars);
     return ok;
+}
+
+/* Keep wrapper projections separate from the planner's shared PathTarget. */
+static void
+add_subquery_join_outputs(RelOptInfo* rel, List* expressions) {
+    CHFdwRelationInfo* fpinfo = (CHFdwRelationInfo*)rel->fdw_private;
+    List* vars = pull_var_clause((Node*)expressions, PVC_RECURSE_PLACEHOLDERS);
+    ListCell* lc;
+
+    if (fpinfo->subquery_exprs == NIL) {
+        fpinfo->subquery_exprs = list_copy(rel->reltarget->exprs);
+    }
+    foreach (lc, vars) {
+        Var* var = lfirst_node(Var, lc);
+
+        if (bms_is_member(var->varno, rel->relids) &&
+            !list_member(fpinfo->subquery_exprs, var)) {
+            fpinfo->subquery_exprs = lappend(fpinfo->subquery_exprs, var);
+        }
+    }
+    list_free(vars);
+    if (IS_JOIN_REL(rel)) {
+        if (fpinfo->make_outerrel_subquery) {
+            add_subquery_join_outputs(fpinfo->outerrel, fpinfo->subquery_exprs);
+        }
+        if (fpinfo->make_innerrel_subquery) {
+            add_subquery_join_outputs(fpinfo->innerrel, fpinfo->subquery_exprs);
+        }
+    }
 }
 
 /*
@@ -2469,7 +2579,9 @@ foreign_join_ok(
     case JOIN_SEMI: /* deparses to LEFT SEMI JOIN */
     case JOIN_ANTI: /* deparses to LEFT ANTI JOIN */
         /* Semi/anti-join target can only reference the outer relation. */
-        if (!semijoin_target_ok(root, joinrel, outerrel, innerrel)) {
+        if (!semijoin_target_ok(
+                root, joinrel, outerrel, innerrel, jointype, extra->restrictlist
+            )) {
             return false;
         }
         break;
@@ -2490,20 +2602,6 @@ foreign_join_ok(
     fpinfo_i = (CHFdwRelationInfo*)innerrel->fdw_private;
     if (!fpinfo_o || !fpinfo_o->pushdown_safe || !fpinfo_i ||
         !fpinfo_i->pushdown_safe) {
-        return false;
-    }
-
-    /*
-     * A SEMI/ANTI joinrel used as the input for a further join would deparse
-     * as an inline nested join, which ClickHouse cannot parse, and the
-     * subquery-wrapping escape hatch requires reltarget coverage that
-     * SEMI/ANTI inputs do not guarantee. Keep such composites local; the
-     * SEMI/ANTI join itself can still push down as the scan's top rel.
-     */
-    if ((IS_JOIN_REL(outerrel) &&
-         (fpinfo_o->jointype == JOIN_SEMI || fpinfo_o->jointype == JOIN_ANTI)) ||
-        (IS_JOIN_REL(innerrel) &&
-         (fpinfo_i->jointype == JOIN_SEMI || fpinfo_i->jointype == JOIN_ANTI))) {
         return false;
     }
 
@@ -2595,8 +2693,14 @@ foreign_join_ok(
      * relations that are required to be deparsed as subqueries, so save the
      * relids of those relations for later use by the deparser.
      */
-    fpinfo->make_outerrel_subquery = false;
-    fpinfo->make_innerrel_subquery = false;
+    fpinfo->make_outerrel_subquery =
+        IS_JOIN_REL(outerrel) &&
+        (jointype == JOIN_SEMI || jointype == JOIN_ANTI ||
+         fpinfo_o->jointype == JOIN_SEMI || fpinfo_o->jointype == JOIN_ANTI);
+    fpinfo->make_innerrel_subquery =
+        IS_JOIN_REL(innerrel) &&
+        (jointype == JOIN_SEMI || jointype == JOIN_ANTI ||
+         fpinfo_i->jointype == JOIN_SEMI || fpinfo_i->jointype == JOIN_ANTI);
     Assert(bms_is_subset(fpinfo_o->lower_subquery_rels, outerrel->relids));
     Assert(bms_is_subset(fpinfo_i->lower_subquery_rels, innerrel->relids));
     fpinfo->lower_subquery_rels =
@@ -2623,10 +2727,14 @@ foreign_join_ok(
      */
     switch (jointype) {
     case JOIN_INNER:
-        fpinfo->remote_conds =
-            list_concat(fpinfo->remote_conds, list_copy(fpinfo_i->remote_conds));
-        fpinfo->remote_conds =
-            list_concat(fpinfo->remote_conds, list_copy(fpinfo_o->remote_conds));
+        fpinfo->remote_conds = list_concat(
+            fpinfo->remote_conds,
+            fpinfo->make_innerrel_subquery ? NIL : list_copy(fpinfo_i->remote_conds)
+        );
+        fpinfo->remote_conds = list_concat(
+            fpinfo->remote_conds,
+            fpinfo->make_outerrel_subquery ? NIL : list_copy(fpinfo_o->remote_conds)
+        );
 
         /*
          * For an inner join, some restrictions can be treated alike.
@@ -2640,17 +2748,25 @@ foreign_join_ok(
         break;
 
     case JOIN_LEFT:
-        fpinfo->joinclauses =
-            list_concat(fpinfo->joinclauses, list_copy(fpinfo_i->remote_conds));
-        fpinfo->remote_conds =
-            list_concat(fpinfo->remote_conds, list_copy(fpinfo_o->remote_conds));
+        fpinfo->joinclauses = list_concat(
+            fpinfo->joinclauses,
+            fpinfo->make_innerrel_subquery ? NIL : list_copy(fpinfo_i->remote_conds)
+        );
+        fpinfo->remote_conds = list_concat(
+            fpinfo->remote_conds,
+            fpinfo->make_outerrel_subquery ? NIL : list_copy(fpinfo_o->remote_conds)
+        );
         break;
 
     case JOIN_RIGHT:
-        fpinfo->joinclauses =
-            list_concat(fpinfo->joinclauses, list_copy(fpinfo_o->remote_conds));
-        fpinfo->remote_conds =
-            list_concat(fpinfo->remote_conds, list_copy(fpinfo_i->remote_conds));
+        fpinfo->joinclauses = list_concat(
+            fpinfo->joinclauses,
+            fpinfo->make_outerrel_subquery ? NIL : list_copy(fpinfo_o->remote_conds)
+        );
+        fpinfo->remote_conds = list_concat(
+            fpinfo->remote_conds,
+            fpinfo->make_innerrel_subquery ? NIL : list_copy(fpinfo_i->remote_conds)
+        );
         break;
 
     case JOIN_SEMI:
@@ -2661,24 +2777,33 @@ foreign_join_ok(
          * outer's conditions go to remote_conds (WHERE). Extract join key
          * equalities to joinclauses for the ON clause.
          */
-        fpinfo->joinclauses =
-            list_concat(fpinfo->joinclauses, list_copy(fpinfo_i->remote_conds));
-        fpinfo->remote_conds =
-            list_concat(fpinfo->remote_conds, list_copy(fpinfo_o->remote_conds));
-        fpinfo->remote_conds =
-            extract_join_equals(fpinfo->remote_conds, &fpinfo->joinclauses);
+        fpinfo->joinclauses = list_concat(
+            fpinfo->joinclauses,
+            fpinfo->make_innerrel_subquery ? NIL : list_copy(fpinfo_i->remote_conds)
+        );
+        fpinfo->remote_conds = list_concat(
+            fpinfo->remote_conds,
+            fpinfo->make_outerrel_subquery ? NIL : list_copy(fpinfo_o->remote_conds)
+        );
+        fpinfo->remote_conds = extract_inner_conds(
+            fpinfo->remote_conds, innerrel->relids, &fpinfo->joinclauses
+        );
 
         /*
-         * Subquery-wrapping a join-typed input would require its
-         * reltarget to cover every Var the ON clause references, which
-         * does not hold for SEMI/ANTI inputs (join-only columns are not
-         * propagated upstream). Until the deparser can widen the wrapped
-         * subquery's targetlist, refuse ANTI pushdown when either input
-         * is itself a join and fall back to local execution. SEMI keeps
-         * its historical behavior.
+         * Before ClickHouse 26.3, the analyzer rejects a non-equality ON
+         * condition that spans both sides when join_use_nulls is enabled. The
+         * 23.x analyzer rejects it regardless of that setting. Keep these joins
+         * local on affected servers. Run this check last to avoid an
+         * unnecessary connection during planning.
          */
-        if (jointype == JOIN_ANTI && (IS_JOIN_REL(outerrel) || IS_JOIN_REL(innerrel))) {
-            return false;
+        if (semi_join_needs_nonequi_on(fpinfo->joinclauses, outerrel, innerrel)) {
+            UserMapping* user =
+                chfdw_gate_user_mapping(root, joinrel, fpinfo_o->server->serverid);
+
+            if (user == NULL ||
+                !chfdw_version_ge(chfdw_get_server_version(user), 26, 3)) {
+                return false;
+            }
         }
         break;
 
@@ -2728,6 +2853,29 @@ foreign_join_ok(
         if (!has_equi_key) {
             return false;
         }
+    }
+
+    if (fpinfo->make_outerrel_subquery || fpinfo->make_innerrel_subquery) {
+        List* needed = list_concat(
+            list_copy(joinrel->reltarget->exprs),
+            extract_actual_clauses(fpinfo->joinclauses, false)
+        );
+
+        needed =
+            list_concat(needed, extract_actual_clauses(fpinfo->remote_conds, false));
+        needed =
+            list_concat(needed, extract_actual_clauses(fpinfo->local_conds, false));
+        if (fpinfo->make_outerrel_subquery) {
+            add_subquery_join_outputs(outerrel, needed);
+            fpinfo->lower_subquery_rels =
+                bms_add_members(fpinfo->lower_subquery_rels, outerrel->relids);
+        }
+        if (fpinfo->make_innerrel_subquery) {
+            add_subquery_join_outputs(innerrel, needed);
+            fpinfo->lower_subquery_rels =
+                bms_add_members(fpinfo->lower_subquery_rels, innerrel->relids);
+        }
+        list_free(needed);
     }
 
     /* Mark that this join can be pushed down safely */
@@ -2938,7 +3086,8 @@ clickhouseGetForeignJoinPaths(
     /*
      * Skip if this join combination has been considered already.
      */
-    if (joinrel->fdw_private) {
+    if (joinrel->fdw_private &&
+        ((CHFdwRelationInfo*)joinrel->fdw_private)->pushdown_safe) {
         return;
     }
 

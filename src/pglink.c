@@ -978,6 +978,11 @@ binary_simple_query(void* conn, const ch_query* query) {
                 TupleDescAttr(query->tupdesc, i - 1)->atttypid == JSONOID) {
                 state->coltypes[j] = JSONOID;
             }
+            if (state->coltypes[j] == TIMESTAMPTZOID &&
+                TupleDescAttr(query->tupdesc, i - 1)->atttypid == TIMESTAMPOID) {
+                /* Match HTTP's UTC ISO output for timestamp without time zone. */
+                state->coltypes[j] = TIMESTAMPOID;
+            }
             j++;
         }
     }

@@ -648,8 +648,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT date_trunc('day', c at time zone 'UTC') as d
 SELECT date_trunc('day', c at time zone 'UTC') as d1 FROM t2 GROUP BY d1 ORDER BY d1;
          d1          
 ---------------------
- 2018-12-31 16:00:00
- 2019-01-01 16:00:00
+ 2019-01-01 00:00:00
+ 2019-01-02 00:00:00
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT date_part('day'::text, timezone('UTC'::text, c)) as d1 FROM t1 GROUP BY d1 ORDER BY d1;
@@ -843,7 +843,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('year', ts) = '20
 SELECT ts FROM t5 WHERE date_part('year', ts) = '2027';
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('month', ts) = '11';
@@ -857,7 +857,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('month', ts) = '1
 SELECT ts FROM t5 WHERE date_part('month', ts) = '11';
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('day', ts) = '18';
@@ -871,7 +871,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('day', ts) = '18'
 SELECT ts FROM t5 WHERE date_part('day', ts) = '18';
          ts          
 ---------------------
- 2028-01-18 15:15:28
+ 2028-01-18 23:15:28
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('hour', ts) = '20';
@@ -885,7 +885,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('hour', ts) = '20
 SELECT ts FROM t5 WHERE date_part('hour', ts) = '20';
          ts          
 ---------------------
- 2025-10-15 13:12:25
+ 2025-10-15 20:12:25
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('minute', ts) = '16';
@@ -899,8 +899,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('minute', ts) = '
 SELECT ts FROM t5 WHERE date_part('minute', ts) = '16';
          ts          
 ---------------------
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('second', ts) = '26';
@@ -914,7 +914,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('second', ts) = '
 SELECT ts FROM t5 WHERE date_part('second', ts) = '26';
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('doy', ts) = '351';
@@ -928,7 +928,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('doy', ts) = '351
 SELECT ts FROM t5 WHERE date_part('doy', ts) = '351';
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('dow', ts) = '2';
@@ -942,8 +942,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('dow', ts) = '2';
 SELECT ts FROM t5 WHERE date_part('dow', ts) = '2';
          ts          
 ---------------------
- 2026-11-17 00:13:26
- 2028-01-18 15:15:28
+ 2026-11-17 08:13:26
+ 2028-01-18 23:15:28
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('quarter', ts) = '1';
@@ -957,9 +957,9 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('quarter', ts) = 
 SELECT ts FROM t5 WHERE date_part('quarter', ts) = '1';
          ts          
 ---------------------
- 2028-01-18 15:15:28
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2028-01-18 23:15:28
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (3 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('isoyear', ts) = '2025';
@@ -973,7 +973,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('isoyear', ts) = 
 SELECT ts FROM t5 WHERE date_part('isoyear', ts) = '2025';
          ts          
 ---------------------
- 2025-10-15 13:12:25
+ 2025-10-15 20:12:25
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('week', ts) = '47';
@@ -987,7 +987,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('week', ts) = '47
 SELECT ts FROM t5 WHERE date_part('week', ts) = '47';
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('epoch', ts) > '1866158180';
@@ -1001,51 +1001,51 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('epoch', ts) > '1
 SELECT ts FROM t5 WHERE date_part('epoch', ts) > '1866158180';
          ts          
 ---------------------
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (2 rows)
 
 -- Check date_part from date.
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('year', ts::date) = 2027;
-                                                           QUERY PLAN                                                           
---------------------------------------------------------------------------------------------------------------------------------
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t5
    Output: ts
-   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toYear(cast(cast(ts, 'Nullable(Date)'), 'Nullable(DateTime)')) = 2027))
+   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toYear(cast(cast(ts, 'Nullable(Date)'), 'Nullable(DateTime64(6, ''UTC''))')) = 2027))
 (3 rows)
 
 SELECT ts FROM t5 WHERE date_part('year', ts::date) = 2027;
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('month', ts::date) = 11;
-                                                          QUERY PLAN                                                           
--------------------------------------------------------------------------------------------------------------------------------
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t5
    Output: ts
-   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toMonth(cast(cast(ts, 'Nullable(Date)'), 'Nullable(DateTime)')) = 11))
+   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toMonth(cast(cast(ts, 'Nullable(Date)'), 'Nullable(DateTime64(6, ''UTC''))')) = 11))
 (3 rows)
 
 SELECT ts FROM t5 WHERE date_part('month', ts::date) = 11;
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_part('day', ts::date) = 18;
-                                                             QUERY PLAN                                                             
-------------------------------------------------------------------------------------------------------------------------------------
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t5
    Output: ts
-   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toDayOfMonth(cast(cast(ts, 'Nullable(Date)'), 'Nullable(DateTime)')) = 18))
+   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toDayOfMonth(cast(cast(ts, 'Nullable(Date)'), 'Nullable(DateTime64(6, ''UTC''))')) = 18))
 (3 rows)
 
 SELECT ts FROM t5 WHERE date_part('day', ts::date) = 18;
          ts          
 ---------------------
- 2028-01-18 15:15:28
+ 2028-01-18 23:15:28
 (1 row)
 
 -- Check EXTRACT mappings.
@@ -1060,7 +1060,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(year FROM ts) = 202
 SELECT ts FROM t5 WHERE EXTRACT(year FROM ts) = 2027;
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(month FROM ts) = 11;
@@ -1074,7 +1074,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(month FROM ts) = 11
 SELECT ts FROM t5 WHERE EXTRACT(month FROM ts) = 11;
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(day FROM ts) = 18;
@@ -1088,7 +1088,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(day FROM ts) = 18;
 SELECT ts FROM t5 WHERE EXTRACT(day FROM ts) = 18;
          ts          
 ---------------------
- 2028-01-18 15:15:28
+ 2028-01-18 23:15:28
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(hour FROM ts) = 20;
@@ -1102,7 +1102,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(hour FROM ts) = 20;
 SELECT ts FROM t5 WHERE EXTRACT(hour FROM ts) = 20;
          ts          
 ---------------------
- 2025-10-15 13:12:25
+ 2025-10-15 20:12:25
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(minute FROM ts) = 16;
@@ -1116,8 +1116,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(minute FROM ts) = 1
 SELECT ts FROM t5 WHERE EXTRACT(minute FROM ts) = 16;
          ts          
 ---------------------
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(second FROM ts) = 26;
@@ -1131,7 +1131,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(second FROM ts) = 2
 SELECT ts FROM t5 WHERE EXTRACT(second FROM ts) = 26;
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(doy FROM ts) = 351;
@@ -1145,7 +1145,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(doy FROM ts) = 351;
 SELECT ts FROM t5 WHERE EXTRACT(doy FROM ts) = 351;
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(dow FROM ts) = 2;
@@ -1159,8 +1159,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(dow FROM ts) = 2;
 SELECT ts FROM t5 WHERE EXTRACT(dow FROM ts) = 2;
          ts          
 ---------------------
- 2026-11-17 00:13:26
- 2028-01-18 15:15:28
+ 2026-11-17 08:13:26
+ 2028-01-18 23:15:28
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(quarter FROM ts) = 1;
@@ -1174,9 +1174,9 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(quarter FROM ts) = 
 SELECT ts FROM t5 WHERE EXTRACT(quarter FROM ts) = 1;
          ts          
 ---------------------
- 2028-01-18 15:15:28
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2028-01-18 23:15:28
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (3 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(isoyear FROM ts) = 2025;
@@ -1190,7 +1190,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(isoyear FROM ts) = 
 SELECT ts FROM t5 WHERE EXTRACT(isoyear FROM ts) = 2025;
          ts          
 ---------------------
- 2025-10-15 13:12:25
+ 2025-10-15 20:12:25
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(week FROM ts) = 47;
@@ -1204,7 +1204,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(week FROM ts) = 47;
 SELECT ts FROM t5 WHERE EXTRACT(week FROM ts) = 47;
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(epoch FROM ts) > 1866158180;
@@ -1218,8 +1218,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(epoch FROM ts) > 18
 SELECT ts FROM t5 WHERE EXTRACT(epoch FROM ts) > 1866158180;
          ts          
 ---------------------
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (2 rows)
 
 -- Check extract from date.
@@ -1234,7 +1234,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(year FROM ts::date)
 SELECT ts FROM t5 WHERE EXTRACT(year FROM ts::date) = 2027;
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(month FROM ts::date) = 11;
@@ -1248,7 +1248,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(month FROM ts::date
 SELECT ts FROM t5 WHERE EXTRACT(month FROM ts::date) = 11;
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(day FROM ts::date) = 18;
@@ -1262,7 +1262,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE EXTRACT(day FROM ts::date) 
 SELECT ts FROM t5 WHERE EXTRACT(day FROM ts::date) = 18;
          ts          
 ---------------------
- 2028-01-18 15:15:28
+ 2028-01-18 23:15:28
 (1 row)
 
 -- Check date_trunc mappings.
@@ -1277,7 +1277,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('year', ts) = '2
 SELECT ts FROM t5 WHERE date_trunc('year', ts) = '2026-01-01'::date;
          ts          
 ---------------------
- 2026-11-17 00:13:26
+ 2026-11-17 08:13:26
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('month', ts) = '2027-12-01'::date;
@@ -1291,7 +1291,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('month', ts) = '
 SELECT ts FROM t5 WHERE date_trunc('month', ts) = '2027-12-01'::date;
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('day', ts) = '2028-01-18'::date;
@@ -1305,49 +1305,49 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('day', ts) = '20
 SELECT ts FROM t5 WHERE date_trunc('day', ts) = '2028-01-18'::date;
          ts          
 ---------------------
- 2028-01-18 15:15:28
+ 2028-01-18 23:15:28
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('hour', ts) = '2029-02-19T01:00:00';
-                                             QUERY PLAN                                             
-----------------------------------------------------------------------------------------------------
+                                                            QUERY PLAN                                                            
+----------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t5
    Output: ts
-   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toStartOfHour(ts) = '2029-02-19 01:00:00'))
+   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toStartOfHour(ts) = cast('2029-02-19 01:00:00' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT ts FROM t5 WHERE date_trunc('hour', ts) = '2029-02-19T01:00:00';
          ts          
 ---------------------
- 2029-02-18 17:16:29
+ 2029-02-19 01:16:29
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('minute', ts) = '2025-10-15T20:12:00';
-                                              QUERY PLAN                                              
-------------------------------------------------------------------------------------------------------
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t5
    Output: ts
-   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toStartOfMinute(ts) = '2025-10-15 20:12:00'))
+   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toStartOfMinute(ts) = cast('2025-10-15 20:12:00' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT ts FROM t5 WHERE date_trunc('minute', ts) = '2025-10-15T20:12:00';
          ts          
 ---------------------
- 2025-10-15 13:12:25
+ 2025-10-15 20:12:25
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('second', ts) = '2027-12-17T22:14:27';
-                                                      QUERY PLAN                                                       
------------------------------------------------------------------------------------------------------------------------
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t5
    Output: ts
-   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toStartOfSecond(toDateTime64(ts, 1)) = '2027-12-17 22:14:27'))
+   Remote SQL: SELECT ts FROM functions_test.t5 WHERE ((toStartOfSecond(toDateTime64(ts, 1)) = cast('2027-12-17 22:14:27' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT ts FROM t5 WHERE date_trunc('second', ts) = '2027-12-17T22:14:27';
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('week', ts) = '2028-01-17'::date;
@@ -1361,7 +1361,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('week', ts) = '2
 SELECT ts FROM t5 WHERE date_trunc('week', ts) = '2028-01-17'::date;
          ts          
 ---------------------
- 2028-01-18 15:15:28
+ 2028-01-18 23:15:28
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('quarter', ts) = '2027-10-01'::date;
@@ -1375,7 +1375,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT ts FROM t5 WHERE date_trunc('quarter', ts) =
 SELECT ts FROM t5 WHERE date_trunc('quarter', ts) = '2027-10-01'::date;
          ts          
 ---------------------
- 2027-12-17 14:14:27
+ 2027-12-17 22:14:27
 (1 row)
 
 -- Check hashing functions.
@@ -1396,11 +1396,11 @@ SELECT key1 FROM t3_map WHERE md5(val) LIKE 'a%' ORDER BY key1;
 
 -- Check to_timestamp(float8).
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t6 WHERE to_timestamp(i64) = to_timestamp(0);
-                                                     QUERY PLAN                                                     
---------------------------------------------------------------------------------------------------------------------
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t6
    Output: i64, f64
-   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(i64, 6, 'UTC') = '1970-01-01 00:00:00'))
+   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(i64, 6, 'UTC') = cast('1970-01-01 00:00:00' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT * FROM t6 WHERE to_timestamp(i64) = to_timestamp(0);
@@ -1410,11 +1410,11 @@ SELECT * FROM t6 WHERE to_timestamp(i64) = to_timestamp(0);
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t6 WHERE to_timestamp(f64) = to_timestamp(0);
-                                                     QUERY PLAN                                                     
---------------------------------------------------------------------------------------------------------------------
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t6
    Output: i64, f64
-   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(f64, 6, 'UTC') = '1970-01-01 00:00:00'))
+   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(f64, 6, 'UTC') = cast('1970-01-01 00:00:00' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT * FROM t6 WHERE to_timestamp(f64) = to_timestamp(0);
@@ -1424,11 +1424,11 @@ SELECT * FROM t6 WHERE to_timestamp(f64) = to_timestamp(0);
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t6 WHERE to_timestamp(i64) = to_timestamp(0);
-                                                     QUERY PLAN                                                     
---------------------------------------------------------------------------------------------------------------------
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t6
    Output: i64, f64
-   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(i64, 6, 'UTC') = '1970-01-01 00:00:00'))
+   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(i64, 6, 'UTC') = cast('1970-01-01 00:00:00' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT * FROM t6 WHERE to_timestamp(i64) = to_timestamp(2042323443);
@@ -1438,11 +1438,11 @@ SELECT * FROM t6 WHERE to_timestamp(i64) = to_timestamp(2042323443);
 (1 row)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t6 WHERE to_timestamp(f64) = to_timestamp(2042323443);
-                                                     QUERY PLAN                                                     
---------------------------------------------------------------------------------------------------------------------
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t6
    Output: i64, f64
-   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(f64, 6, 'UTC') = '2034-09-20 00:04:03'))
+   Remote SQL: SELECT i64, f64 FROM functions_test.t6 WHERE ((toDateTime64(f64, 6, 'UTC') = cast('2034-09-20 00:04:03' as DateTime64(6, 'UTC'))))
 (3 rows)
 
 SELECT * FROM t6 WHERE to_timestamp(f64) = to_timestamp(2042323443);
@@ -1468,8 +1468,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < NOW();
 SELECT * FROM t1 WHERE c < NOW() ORDER BY a LIMIT 2;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < statement_timestamp();
@@ -1517,8 +1517,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < CURRENT_DATE;
 SELECT * FROM t1 WHERE c < CURRENT_DATE ORDER BY a LIMIT 2;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < CURRENT_TIMESTAMP;
@@ -1532,8 +1532,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < CURRENT_TIMESTAMP;
 SELECT * FROM t1 WHERE c < CURRENT_TIMESTAMP ORDER BY a LIMIT 2;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < CURRENT_TIMESTAMP(3);
@@ -1547,8 +1547,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < CURRENT_TIMESTAMP(3);
 SELECT * FROM t1 WHERE c < CURRENT_TIMESTAMP(3) ORDER BY a LIMIT 2;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < LOCALTIMESTAMP;
@@ -1562,8 +1562,8 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < LOCALTIMESTAMP;
 SELECT * FROM t1 WHERE c < LOCALTIMESTAMP ORDER BY a LIMIT 2;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
 (2 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < LOCALTIMESTAMP(3);
@@ -1577,26 +1577,26 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE c < LOCALTIMESTAMP(3);
 SELECT * FROM t1 WHERE c < LOCALTIMESTAMP(3) ORDER BY a LIMIT 2;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
 (2 rows)
 
 -- Use with other functions.
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE date_part('year', c) < date_part('year', CURRENT_DATE);
-                                                                    QUERY PLAN                                                                    
---------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                           QUERY PLAN                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
  Foreign Scan on public.t1
    Output: a, b, c
-   Remote SQL: SELECT a, b, c FROM functions_test.t1 WHERE ((toYear(c) < toYear(cast(toDate(now('America/Los_Angeles')), 'Nullable(DateTime)'))))
+   Remote SQL: SELECT a, b, c FROM functions_test.t1 WHERE ((toYear(c) < toYear(cast(toDate(now('America/Los_Angeles')), 'Nullable(DateTime64(6, ''UTC''))'))))
 (3 rows)
 
 SELECT * FROM t1 WHERE date_part('year', c) < date_part('year', CURRENT_DATE);
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
- 2 | 2 | 2019-01-02 03:00:00
- 2 | 3 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
+ 2 | 2 | 2019-01-02 11:00:00
+ 2 | 3 | 2019-01-02 10:00:00
 (4 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE date_trunc('day', c) < date_trunc('day', CURRENT_TIMESTAMP) - INTERVAL '1 day' ORDER BY a LIMIT 2;
@@ -1610,10 +1610,10 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t1 WHERE date_trunc('day', c) < date_
 SELECT * FROM t1 WHERE date_trunc('day', c) < date_trunc('day', CURRENT_TIMESTAMP) - INTERVAL '1 day' ORDER BY a;
  a | b |          c          
 ---+---+---------------------
- 1 | 1 | 2019-01-01 02:00:00
- 2 | 2 | 2019-01-02 02:00:00
- 2 | 2 | 2019-01-02 03:00:00
- 2 | 3 | 2019-01-02 02:00:00
+ 1 | 1 | 2019-01-01 10:00:00
+ 2 | 2 | 2019-01-02 10:00:00
+ 2 | 2 | 2019-01-02 11:00:00
+ 2 | 3 | 2019-01-02 10:00:00
 (4 rows)
 
 \unset ECHO
@@ -1765,12 +1765,12 @@ SELECT to_char(ts, 'YYYY-MM-DD HH24:MI:SS') FROM t5 ORDER BY 1;
 SELECT to_char(ts, 'YYYY-MM-DD HH24:MI:SS') FROM t5 ORDER BY 1;
        to_char       
 ---------------------
- 2025-10-15 13:12:25
- 2026-11-17 00:13:26
- 2027-12-17 14:14:27
- 2028-01-18 15:15:28
- 2029-02-18 17:16:29
- 2030-03-19 19:16:30
+ 2025-10-15 20:12:25
+ 2026-11-17 08:13:26
+ 2027-12-17 22:14:27
+ 2028-01-18 23:15:28
+ 2029-02-19 01:16:29
+ 2030-03-20 02:16:30
 (6 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -1785,12 +1785,12 @@ SELECT to_char(ts, 'YY/MM/DD HH12:MI AM Q DDD Mon Dy') FROM t5 ORDER BY 1;
 SELECT to_char(ts, 'YY/MM/DD HH12:MI AM Q DDD Mon Dy') FROM t5 ORDER BY 1;
              to_char             
 ---------------------------------
- 25/10/15 01:12 PM 4 288 Oct Wed
- 26/11/17 12:13 AM 4 321 Nov Tue
- 27/12/17 02:14 PM 4 351 Dec Fri
- 28/01/18 03:15 PM 1 018 Jan Tue
- 29/02/18 05:16 PM 1 049 Feb Sun
- 30/03/19 07:16 PM 1 078 Mar Tue
+ 25/10/15 08:12 PM 4 288 Oct Wed
+ 26/11/17 08:13 AM 4 321 Nov Tue
+ 27/12/17 10:14 PM 4 351 Dec Fri
+ 28/01/18 11:15 PM 1 018 Jan Tue
+ 29/02/19 01:16 AM 1 050 Feb Mon
+ 30/03/20 02:16 AM 1 079 Mar Wed
 (6 rows)
 
 -- Quoted literal text and a literal % round-trip via formatDateTime escaping.

@@ -341,7 +341,7 @@ ch_binary_simple_query(
                 dst[o]          = '\0';
                 params[i].value = dst;
             } else {
-                params[i].value = "'\\N'";
+                params[i].value = "'\\\\N'";
             }
         }
     }

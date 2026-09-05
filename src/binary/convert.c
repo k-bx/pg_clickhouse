@@ -543,6 +543,12 @@ init_output_convert_state(ch_convert_output_state* state) {
         return;
     }
 
+    if (state->intype == TIMESTAMPOID && state->outtype == TIMESTAMPTZOID) {
+        /* A naive timestamp uses UTC on the wire, as in the HTTP driver. */
+        state->outtype = TIMESTAMPOID;
+        return;
+    }
+
     /* column_append() copies all bytes, no cast needed. */
     if (state->intype == BYTEAOID && state->outtype == TEXTOID) {
         return;
